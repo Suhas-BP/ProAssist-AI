@@ -1,0 +1,17 @@
+# ProAssist AI Phase 1 Dependencies
+numpy>=1.26.0
+scipy>=1.11.0
+onnxruntime>=1.17.0
+PyAudio>=0.2.14
+faster-whisper>=1.0.0
+openwakeword>=0.6.0
+pyttsx3>=2.90
+huggingface-hub>=0.20.0
+
+# Phase 2 & Phase 3 Dependencies
+requests>=2.31.0
+
+# Local RAG Module Dependencies
+fastembed>=0.8.0
+pypdf>=6.18.0
+python-docx>=1.1.0

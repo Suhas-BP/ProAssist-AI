@@ -1,0 +1,29 @@
+{
+  "user_name": "santhosh",
+  "enrolled_at": "2026-09-17T13:27:17.666722",
+  "sample_count": 3,
+  "sample_duration_seconds": 3.5,
+  "embedding_dimensions": 256,
+  "intra_sample_consistency": 0.7619,
+  "threshold": 0.5,
+  "diagnostics": {
+    "sample_1": {
+      "raw_rms": 0.040785349905490875,
+      "raw_peak": 0.28594970703125,
+      "active_duration": 3.5,
+      "feature_std": 4.470561504364014
+    },
+    "sample_2": {
+      "raw_rms": 0.031752973794937134,
+      "raw_peak": 0.191802978515625,
+      "active_duration": 3.22,
+      "feature_std": 3.9784607887268066
+    },
+    "sample_3": {
+      "raw_rms": 0.03890516236424446,
+      "raw_peak": 0.25128173828125,
+      "active_duration": 2.7,
+      "feature_std": 4.826447486877441
+    }
+  }
+}
