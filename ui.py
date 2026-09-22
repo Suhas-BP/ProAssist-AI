@@ -5974,7 +5974,11 @@ class AgentUI:
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
-        self._win.show()
+        # Start in floating island mode by default
+        self._win.hide()
+        if hasattr(self._win, "_floating_island") and self._win._floating_island:
+            self._win._floating_island.show()
+            self._win._floating_island.raise_()
 
     @property
     def muted(self) -> bool:

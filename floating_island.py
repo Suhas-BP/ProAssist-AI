@@ -211,7 +211,7 @@ class FloatingIsland(QWidget):
     and on State 3 raises MainWindow and collapses back.
     """
 
-    COLLAPSED_W = 260
+    COLLAPSED_W = 280
     COLLAPSED_H = 46
 
     EXPANDED_W = 300
@@ -266,8 +266,8 @@ class FloatingIsland(QWidget):
             }}
         """)
         pill_lay = QHBoxLayout(self._pill_widget)
-        pill_lay.setContentsMargins(14, 0, 10, 0)
-        pill_lay.setSpacing(8)
+        pill_lay.setContentsMargins(12, 0, 10, 0)
+        pill_lay.setSpacing(7)
 
         # Status Dot
         self._pill_dot = QLabel("●")
@@ -298,11 +298,33 @@ class FloatingIsland(QWidget):
         self._waveform = WaveformBars()
         pill_lay.addWidget(self._waveform)
 
-        # Chevron down button
+        # Interactive Microphone Toggle Button
+        self._pill_mic_btn = QPushButton()
+        self._pill_mic_btn.setFixedSize(28, 28)
+        self._pill_mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pill_mic_btn.setIcon(icon("microphone", active=True))
+        self._pill_mic_btn.setToolTip("Click to Mute / Unmute Microphone")
+        self._pill_mic_btn.setStyleSheet("""
+            QPushButton {
+                background: #1c1e1d;
+                border: 1px solid #2a2c2b;
+                border-radius: 14px;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background: #242725;
+                border-color: #4fe28c;
+            }
+        """)
+        self._pill_mic_btn.clicked.connect(self._toggle_mic)
+        pill_lay.addWidget(self._pill_mic_btn)
+
+        # Chevron down button (Expand card)
         self._chevron_down_btn = QPushButton()
         self._chevron_down_btn.setFixedSize(28, 28)
         self._chevron_down_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._chevron_down_btn.setIcon(icon("chevron-down"))
+        self._chevron_down_btn.setToolTip("Expand Quick Dashboard")
         self._chevron_down_btn.setStyleSheet("""
             QPushButton {
                 background: #1c1e1d;
@@ -368,6 +390,7 @@ class FloatingIsland(QWidget):
         self._chevron_up_btn.setFixedSize(28, 28)
         self._chevron_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._chevron_up_btn.setIcon(icon("chevron-up"))
+        self._chevron_up_btn.setToolTip("Collapse to Mini Pill")
         self._chevron_up_btn.setStyleSheet("""
             QPushButton {
                 background: #1c1e1d;
@@ -405,7 +428,7 @@ class FloatingIsland(QWidget):
         tiles_row.setContentsMargins(0, 0, 0, 0)
         tiles_row.setSpacing(8)
 
-        def _make_tile(icon_name: str, active: bool, initial_val: str):
+        def _make_tile(icon_name: str, active: bool, initial_val: str, on_click=None):
             tile = QFrame()
             tile.setStyleSheet(f"""
                 background: {C_TILE_BG};
@@ -429,10 +452,15 @@ class FloatingIsland(QWidget):
             vlbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             tlay.addWidget(vlbl)
 
+            if on_click:
+                btn_ico.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_ico.clicked.connect(on_click)
+                tile.setCursor(Qt.CursorShape.PointingHandCursor)
+
             return tile, btn_ico, vlbl
 
         self._tile_cpu, self._tile_cpu_ico, self._tile_cpu_lbl = _make_tile("cpu", False, "22%")
-        self._tile_mic, self._tile_mic_ico, self._tile_mic_lbl = _make_tile("microphone", True, "On")
+        self._tile_mic, self._tile_mic_ico, self._tile_mic_lbl = _make_tile("microphone", True, "On", on_click=self._toggle_mic)
         try:
             from core.voice_auth import VoiceAuthenticator
             _enrolled = VoiceAuthenticator().is_enrolled()
@@ -447,7 +475,7 @@ class FloatingIsland(QWidget):
         card_lay.addLayout(tiles_row)
 
         # "Open full dashboard" Button (STATE 3 trigger)
-        self._open_dash_btn = QPushButton("  Open full dashboard")
+        self._open_dash_btn = QPushButton("  Open Fullscreen / Dashboard")
         self._open_dash_btn.setFont(_island_font(9, bold=True))
         self._open_dash_btn.setFixedHeight(36)
         self._open_dash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -496,6 +524,12 @@ class FloatingIsland(QWidget):
         if hasattr(self._main_window, "_voice_auth_sig"):
             self._main_window._voice_auth_sig.connect(self.on_voice_auth_updated)
 
+    # ── Actions & Helpers ────────────────────────────────────────────────────
+    def _toggle_mic(self):
+        """Toggle microphone mute/unmute state."""
+        if self._main_window and hasattr(self._main_window, "_toggle_mute"):
+            self._main_window._toggle_mute()
+
     # ── State Updates ────────────────────────────────────────────────────────
     def on_cpu_updated(self, val: float, text: str):
         self._tile_cpu_lbl.setText(text)
@@ -534,11 +568,36 @@ class FloatingIsland(QWidget):
         self._pill_dot.setStyleSheet(f"color: {dot_col}; background: transparent;")
         self._card_dot.setStyleSheet(f"color: {dot_col}; background: transparent;")
 
-        # Mic tile
+        # Pill mic button
         if not mic_on:
+            self._pill_mic_btn.setIcon(icon("microphone", active=False))
+            self._pill_mic_btn.setStyleSheet("""
+                QPushButton {
+                    background: #2b1818;
+                    border: 1px solid #ff4444;
+                    border-radius: 14px;
+                    padding: 0;
+                }
+                QPushButton:hover {
+                    background: #3b2020;
+                }
+            """)
             self._tile_mic_lbl.setText("Muted")
             self._tile_mic_ico.setIcon(icon("microphone", active=False))
         else:
+            self._pill_mic_btn.setIcon(icon("microphone", active=True))
+            self._pill_mic_btn.setStyleSheet("""
+                QPushButton {
+                    background: #1c1e1d;
+                    border: 1px solid #2a2c2b;
+                    border-radius: 14px;
+                    padding: 0;
+                }
+                QPushButton:hover {
+                    background: #242725;
+                    border-color: #4fe28c;
+                }
+            """)
             self._tile_mic_lbl.setText("On")
             self._tile_mic_ico.setIcon(icon("microphone", active=True))
 
@@ -590,15 +649,21 @@ class FloatingIsland(QWidget):
         self._anim.start()
 
     def open_dashboard(self):
-        """STATE 3: Raise MainWindow and collapse island back to STATE 1."""
+        """STATE 3: Raise MainWindow in full normal/fullscreen view and collapse island back to STATE 1."""
         if self._main_window:
+            self._main_window.showNormal()
             self._main_window.show()
             self._main_window.raise_()
             self._main_window.activateWindow()
 
         self.collapse()
 
-    # ── Window Dragging & Position Persistence ────────────────────────────────
+    # ── Window Dragging & Interaction ────────────────────────────────────────
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.open_dashboard()
+            e.accept()
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
