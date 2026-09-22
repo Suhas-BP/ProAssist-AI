@@ -4648,6 +4648,15 @@ class MainWindow(QMainWindow):
         mem_btn.clicked.connect(self._open_memory_panel)
         lay.addWidget(mem_btn)
 
+        island_btn = QPushButton("  Floating Mini Mode")
+        island_btn.setFixedHeight(30)
+        island_btn.setFont(_app_font(9))
+        island_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        island_btn.setIcon(icon("chevron-down"))
+        island_btn.setStyleSheet(_BTN_STYLE_DIM)
+        island_btn.clicked.connect(self.toggle_floating_island)
+        lay.addWidget(island_btn)
+
         w.adjustSize()
         return w
 
