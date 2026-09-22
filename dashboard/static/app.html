@@ -4,153 +4,867 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AGENT Dashboard</title>
+  <link rel="stylesheet" href="/static/tabler-icons.min.css">
   <script src="/static/crypto.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg:      #07090f;
-      --surface: rgba(255,255,255,0.04);
-      --border:  rgba(255,255,255,0.07);
-      --accent:  #6366f1;
-      --adim:    rgba(99,102,241,0.14);
-      --text:    #dde3ed;
-      --muted:   #5e6a7e;
-      --green:   #22c55e;
-      --gdim:    rgba(34,197,94,0.14);
+      --bg:           #0b0c0c;
+      --card-bg:      #141516;
+      --border:       #262a28;
+      --border-dashed:#3a3e3c;
+      --green-bright: #2ee672;
+      --green-accent: #4fe28c;
+      --green-dim:    #0e2a20;
+      --green-border: #235a3f;
+      --text-muted:   #8a8f8d;
+      --text-gray:    #c9cccb;
+      --text-white:   #f2f2f2;
+      --amber:        #e8a33d;
+      --blue-sys:     #5b9dff;
+      --btn-bg:       #1c1e1d;
+      --btn-border:   #2a2c2b;
+      --red-bg:       #2a1414;
+      --red-border:   #5a2323;
+      --red-text:     #e05a5a;
     }
+
     html, body {
-      height: 100%; background: var(--bg); color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      display: flex; flex-direction: column; overflow: hidden;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text-white);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* ── HEADER ── */
-    header {
-      flex-shrink: 0; display: flex; align-items: center; gap: 10px;
-      padding: 12px 16px; border-bottom: 1px solid var(--border);
-      background: rgba(7,9,15,0.95);
+    /* ── DASHBOARD SHELL ── */
+    .dashboard-container {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      height: 100vh;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
     }
-    .logo { font-size: 15px; font-weight: 700; letter-spacing: 6px; }
-    .logo em { color: var(--accent); font-style: normal; }
-    .pill {
-      display: flex; align-items: center; gap: 6px; padding: 4px 11px;
-      border-radius: 99px; background: var(--surface); border: 1px solid var(--border);
-      font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
-      color: var(--muted); transition: all 0.3s;
+
+    /* ── TOP BAR ── */
+    header.top-bar {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
     }
-    .pill.on { background: var(--gdim); border-color: rgba(34,197,94,0.3); color: var(--green); }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
-    .pill.on .dot { background: var(--green); animation: blink 2s infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
-    .spacer { flex: 1; }
+    .top-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green-bright);
+      box-shadow: 0 0 8px rgba(46, 230, 114, 0.45);
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.9); }
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-white);
+      letter-spacing: 0.2px;
+    }
+    .badge-ver {
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--btn-bg);
+      border: 0.5px solid var(--border);
+      padding: 3px 9px;
+      border-radius: 8px;
+      text-transform: lowercase;
+    }
     .enc-badge {
-      font-size: 9px; font-weight: 700; letter-spacing: 1.5px; padding: 3px 8px;
-      border-radius: 4px; display: none;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      display: none;
     }
-    .enc-badge.on  { display: block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); }
-    .enc-badge.off { display: block; background: rgba(255,100,100,0.08); border: 1px solid rgba(255,100,100,0.2); color: #f87171; }
-    .url { font-size: 10px; font-family: monospace; color: var(--muted); padding: 4px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+    .enc-badge.on {
+      display: inline-block;
+      background: var(--green-dim);
+      border: 0.5px solid var(--green-border);
+      color: var(--green-accent);
+    }
+    .enc-badge.off {
+      display: inline-block;
+      background: var(--red-bg);
+      border: 0.5px solid var(--red-border);
+      color: var(--red-text);
+    }
+    .url {
+      font-size: 10px;
+      font-family: monospace;
+      color: var(--text-muted);
+      background: var(--btn-bg);
+      border: 0.5px solid var(--border);
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+    .top-right {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .top-date {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .top-time {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-white);
+      letter-spacing: 0.5px;
+    }
+    .btn-circle {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 50%;
+      background: var(--btn-bg);
+      border: 0.5px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-circle:hover {
+      background: #252827;
+      border-color: var(--text-muted);
+    }
 
-    /* ── FEED ── */
-    main { flex: 1; overflow-y: auto; padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 10px; }
-    main::-webkit-scrollbar { width: 3px; }
-    main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    .msg { max-width: 82%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.55; animation: pop 0.18s ease; }
-    @keyframes pop { from { opacity:0; transform:translateY(4px); } }
-    .msg-j   { align-self:flex-start; background:var(--adim);   border:1px solid rgba(99,102,241,0.18); border-bottom-left-radius:4px; }
-    .msg-u   { align-self:flex-end;   background:var(--surface); border:1px solid var(--border);        border-bottom-right-radius:4px; }
-    .msg-sys { align-self:center; font-size:11px; color:var(--muted); padding:2px 0; background:transparent; border:none; letter-spacing:0.3px; }
-    .lbl { font-size:9px; font-weight:700; letter-spacing:2px; text-transform:uppercase; opacity:0.45; margin-bottom:4px; }
-    .msg-j .lbl { color:var(--accent); }
-    .msg-u .lbl { color:var(--muted); text-align:right; }
+    /* ── 3-COLUMN GRID ── */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr) 260px;
+      gap: 12px;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
 
-    /* ── FILE CARD ── */
+    /* ── LEFT COLUMN ── */
+    .col-left {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .card-sys {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      flex-shrink: 0;
+    }
+    .sec-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin: 0 0 10px;
+    }
+    .metric-row {
+      margin-bottom: 8px;
+    }
+    .metric-label-val {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .metric-label { color: var(--text-gray); }
+    .metric-val   { color: var(--text-white); font-weight: 500; }
+    .metric-track {
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+    }
+    .metric-fill-cpu {
+      height: 4px;
+      width: 22%;
+      border-radius: 2px;
+      background: var(--green-bright);
+    }
+    .metric-fill-mem {
+      height: 4px;
+      width: 68%;
+      border-radius: 2px;
+      background: var(--amber);
+    }
+    .grid-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .stat-title {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+    .stat-val {
+      font-size: 12px;
+      color: var(--text-white);
+      font-weight: 500;
+      margin: 2px 0 0;
+    }
+
+    /* Controls */
+    .card-controls {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+    }
+    .ctrl-btn {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+      outline: none;
+      border: 0.5px solid var(--btn-border);
+      background: var(--btn-bg);
+      color: #e8e8e6;
+    }
+    .ctrl-btn:hover { opacity: 0.88; }
+    .ctrl-btn:active { transform: scale(0.98); }
+    .ctrl-btn.active {
+      background: var(--green-dim);
+      border-color: var(--green-border);
+      color: var(--green-accent);
+    }
+    .ctrl-btn i {
+      font-size: 15px;
+    }
+    .ctrl-sub-grid {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .ctrl-mini-btn {
+      flex: 1;
+      padding: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--btn-bg);
+      border: 0.5px solid var(--btn-border);
+      border-radius: 9px;
+      cursor: pointer;
+      color: var(--text-gray);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .ctrl-mini-btn:hover {
+      background: #252827;
+      border-color: var(--text-muted);
+      color: var(--text-white);
+    }
+    .ctrl-mini-btn i { font-size: 14px; }
+
+    /* ── CENTER COLUMN ── */
+    .col-center {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .card-core {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      justify-content: center;
+    }
+    .core-title {
+      font-size: 17px;
+      font-weight: 500;
+      color: var(--text-white);
+      margin: 0;
+    }
+    .core-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--green-dim);
+      border: 0.5px solid var(--green-border);
+      color: var(--green-accent);
+      padding: 5px 14px;
+      border-radius: 9px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green-accent);
+      animation: blink 2s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    .pill.on {
+      background: var(--green-dim);
+      border-color: var(--green-border);
+      color: var(--green-accent);
+    }
+
+    /* File drop zone */
+    .card-drop {
+      background: var(--card-bg);
+      border: 0.5px dashed var(--border-dashed);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .card-drop:hover, .card-drop.drag-over {
+      border-color: var(--green-accent);
+      background: rgba(14, 42, 32, 0.4);
+    }
+    .card-drop i {
+      font-size: 22px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+    .drop-primary {
+      font-size: 13px;
+      color: #e8e8e6;
+      margin: 0;
+      font-weight: 400;
+    }
+    .drop-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
+    /* ── RIGHT COLUMN: ACTIVITY LOG ── */
+    .col-right {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .act-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      flex-shrink: 0;
+    }
+    .act-title {
+      font-size: 13px;
+      color: #e8e8e6;
+      margin: 0;
+      font-weight: 500;
+    }
+    .act-badge {
+      font-size: 10px;
+      color: var(--green-accent);
+      font-weight: 600;
+    }
+
+    /* Feed messages */
+    #feed {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 4px;
+      min-height: 0;
+    }
+    #feed::-webkit-scrollbar { width: 3px; }
+    #feed::-webkit-scrollbar-track { background: transparent; }
+    #feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .msg {
+      font-size: 12px;
+      line-height: 1.5;
+      animation: pop 0.18s ease;
+    }
+    @keyframes pop {
+      from { opacity: 0; transform: translateY(4px); }
+    }
+    .msg-sys {
+      color: var(--text-gray);
+      background: transparent;
+      border: none;
+      letter-spacing: 0.2px;
+      padding: 1px 0;
+      word-break: break-word;
+    }
+    .sys-badge {
+      color: var(--blue-sys);
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .msg-j {
+      align-self: flex-start;
+      background: var(--green-dim);
+      border: 0.5px solid var(--green-border);
+      border-radius: 10px;
+      border-bottom-left-radius: 3px;
+      padding: 8px 12px;
+      max-width: 90%;
+      color: var(--text-white);
+    }
+    .msg-u {
+      align-self: flex-end;
+      background: var(--btn-bg);
+      border: 0.5px solid var(--btn-border);
+      border-radius: 10px;
+      border-bottom-right-radius: 3px;
+      padding: 8px 12px;
+      max-width: 90%;
+      color: var(--text-white);
+    }
+    .lbl {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+      opacity: 0.7;
+    }
+    .msg-j .lbl { color: var(--green-accent); }
+    .msg-u .lbl { color: var(--text-muted); text-align: right; }
+
+    /* File cards */
     .msg-file {
       align-self: flex-end;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 14px; border-bottom-right-radius: 4px;
-      padding: 11px 14px; display: flex; align-items: center; gap: 12px;
-      max-width: 82%; animation: pop 0.18s ease;
+      background: var(--btn-bg);
+      border: 0.5px solid var(--btn-border);
+      border-radius: 10px;
+      padding: 9px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 90%;
+      animation: pop 0.18s ease;
     }
-    .fc-icon { font-size: 26px; flex-shrink: 0; }
+    .fc-icon { font-size: 20px; flex-shrink: 0; }
     .fc-meta { flex: 1; min-width: 0; }
-    .fc-lbl  { font-size:9px; font-weight:700; letter-spacing:2px; text-transform:uppercase; opacity:0.45; color:var(--muted); margin-bottom:4px; }
-    .fc-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .fc-size { font-size: 11px; color: var(--muted); margin-top: 2px; }
-    .fc-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 7px; overflow: hidden; }
-    .fc-bar { height: 100%; width: 0%; background: var(--accent); border-radius: 2px; transition: width 0.12s linear; }
-    .fc-status { font-size: 10px; font-weight: 700; letter-spacing: 1px; flex-shrink: 0; color: var(--muted); }
-    .fc-status.done { color: var(--green); }
-    .fc-status.err  { color: #f87171; }
-    .fc-dl { display:block; margin-top:6px; font-size:11px; color:var(--accent); text-decoration:none; font-weight:600; }
+    .fc-lbl  { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px; }
+    .fc-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-white); }
+    .fc-size { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+    .fc-bar-wrap { height: 3px; background: var(--border); border-radius: 2px; margin-top: 5px; overflow: hidden; }
+    .fc-bar { height: 100%; width: 0%; background: var(--green-accent); border-radius: 2px; transition: width 0.12s linear; }
+    .fc-status { font-size: 10px; font-weight: 700; flex-shrink: 0; color: var(--text-muted); }
+    .fc-status.done { color: var(--green-accent); }
+    .fc-status.err  { color: var(--red-text); }
+    .fc-dl { display: block; margin-top: 4px; font-size: 10px; color: var(--green-accent); text-decoration: none; font-weight: 600; }
     .fc-dl:hover { opacity: 0.8; }
 
-    /* ── FOOTER ── */
-    footer { flex-shrink:0; padding:10px 14px; border-top:1px solid var(--border); background:rgba(7,9,15,0.95); display:flex; gap:8px; align-items:center; }
-    #inp { flex:1; padding:11px 14px; background:var(--surface); border:1.5px solid var(--border); border-radius:12px; color:var(--text); font-size:14px; outline:none; transition:border-color 0.15s; }
-    #inp:focus { border-color: var(--accent); }
-    #inp::placeholder { color: var(--muted); }
-    .btn { padding:11px 15px; border:none; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:1.5px; cursor:pointer; transition:opacity 0.15s,transform 0.1s; }
-    .btn:active { transform: scale(0.96); }
-    .btn:hover  { opacity: 0.82; }
-    .btn-send { background: var(--accent); color: #fff; }
-    .btn-wake { background:var(--surface); border:1px solid var(--border); color:var(--muted); display:none; }
-    .btn-wake.show { display:block; color:var(--green); border-color:rgba(34,197,94,0.35); }
-    .btn-attach {
-      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
-      padding: 11px 13px; font-size: 16px; line-height: 1; border-radius: 12px;
-      cursor: pointer; transition: opacity 0.15s, transform 0.1s; display: flex;
-      align-items: center; justify-content: center; flex-shrink: 0;
+    /* Bottom status badges in log card */
+    .act-foot-badges {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 0.5px solid var(--border);
+      flex-shrink: 0;
     }
-    .btn-attach:hover  { opacity: 0.82; border-color: var(--accent); color: var(--accent); }
-    .btn-attach:active { transform: scale(0.96); }
+    .act-badge-item {
+      flex: 1;
+      text-align: center;
+    }
+    .act-badge-item i {
+      font-size: 15px;
+    }
+    .act-badge-item p {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin: 4px 0 0;
+      white-space: nowrap;
+    }
 
-    /* ── MIC BUTTON ── */
+    /* ── BOTTOM COMMAND BAR ── */
+    footer.bottom-bar {
+      background: var(--card-bg);
+      border: 0.5px solid var(--border);
+      border-radius: 14px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    #inp {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: var(--text-white);
+      font-size: 13px;
+      outline: none;
+    }
+    #inp::placeholder {
+      color: var(--text-muted);
+    }
+    .audio-bars {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 22px;
+      padding: 0 4px;
+    }
+    .audio-bar {
+      width: 2px;
+      background: var(--green-accent);
+      border-radius: 1px;
+      transition: height 0.15s ease;
+    }
+    .btn-send {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 50%;
+      background: var(--btn-bg);
+      border: 0.5px solid var(--btn-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-send:hover {
+      background: #252827;
+      border-color: var(--text-muted);
+    }
+    .btn-send i {
+      font-size: 15px;
+      color: var(--text-gray);
+    }
+    .btn-interrupt {
+      border-radius: 9px;
+      background: var(--red-bg);
+      border: 0.5px solid var(--red-border);
+      color: var(--red-text);
+      gap: 6px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn-interrupt:hover { opacity: 0.88; }
+    .btn-interrupt:active { transform: scale(0.97); }
+    .btn-interrupt i { font-size: 15px; }
+
     #mic-btn {
-      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
-      padding: 11px 13px; font-size: 16px; line-height: 1; border-radius: 12px;
-      cursor: pointer; transition: opacity 0.15s, transform 0.1s, background 0.2s, border-color 0.2s;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--green-dim);
+      border: 0.5px solid var(--green-border);
+      color: var(--green-accent);
+      padding: 8px 14px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s, background 0.2s, border-color 0.2s;
     }
-    #mic-btn:hover  { opacity: 0.82; border-color: var(--accent); color: var(--accent); }
-    #mic-btn:active { transform: scale(0.96); }
+    #mic-btn:hover { opacity: 0.88; }
     #mic-btn.recording {
-      background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.45); color: #ef4444;
-      animation: mic-pulse 1s ease-in-out infinite;
+      background: var(--red-bg);
+      border-color: var(--red-border);
+      color: var(--red-text);
+      animation: pulse-mic 1.2s infinite ease-in-out;
     }
-    #mic-btn.unsupported { opacity: 0.3; cursor: not-allowed; }
-    @keyframes mic-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.65;transform:scale(0.97)} }
+    @keyframes pulse-mic {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(0.97); opacity: 0.8; }
+    }
+    #mic-btn i { font-size: 14px; }
+
+    /* Hidden helper for wake state compatibility */
+    #wake { display: none; }
 
     /* ── TOAST ── */
     #toast {
-      position:fixed; top:66px; left:50%; transform:translateX(-50%) translateY(-8px);
-      background:rgba(34,197,94,0.16); border:1px solid rgba(34,197,94,0.4);
-      color:var(--green); font-size:12px; font-weight:700; letter-spacing:1px;
-      padding:7px 18px; border-radius:99px;
-      opacity:0; transition:opacity 0.22s,transform 0.22s;
-      pointer-events:none; white-space:nowrap;
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-10px);
+      background: var(--green-dim);
+      border: 0.5px solid var(--green-border);
+      color: var(--green-accent);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      padding: 6px 18px;
+      border-radius: 99px;
+      opacity: 0;
+      transition: opacity 0.22s ease, transform 0.22s ease;
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 9999;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
     }
-    #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 880px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+      }
+      .col-right {
+        min-height: 320px;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="toast"></div>
-  <header>
-    <div class="logo"><em>J</em>ARVIS</div>
-    <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
-    <div class="enc-badge" id="enc">AES-256</div>
-    <div class="spacer"></div>
-    <div class="url">__IP__:__PORT__</div>
-  </header>
-  <main id="feed"></main>
-  <footer>
-    <input id="inp" placeholder="Send a command to AGENT…" autocomplete="off">
-    <label class="btn-attach" for="file-inp" title="Send file">📎</label>
-    <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
-    <button id="mic-btn" onclick="doMic()" title="Voice command">🎤</button>
-    <button class="btn btn-wake" id="wake" onclick="doWake()">WAKE</button>
-    <button class="btn btn-send" onclick="doSend()">SEND</button>
-  </footer>
+
+  <div class="dashboard-container">
+    <!-- ── TOP BAR ── -->
+    <header class="top-bar">
+      <div class="top-left">
+        <div class="live-dot"></div>
+        <span class="brand-title">ProAssist AI</span>
+        <span class="badge-ver">agent 001</span>
+        <div class="enc-badge" id="enc">AES-256</div>
+        <div class="url">__IP__:__PORT__</div>
+      </div>
+      <div class="top-right">
+        <span class="top-date" id="top-date">Tue 22 Sep 2026</span>
+        <span class="top-time" id="top-time">07:52:33</span>
+        <button class="btn-circle" aria-label="Settings" onclick="toast('Settings drawer available in AGENT desktop HUD')">
+          <i class="ti ti-settings" style="font-size:15px;color:var(--text-gray)" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- ── 3-COLUMN GRID ── -->
+    <div class="dashboard-grid">
+
+      <!-- ── LEFT COLUMN: System Monitor + Controls ── -->
+      <div class="col-left">
+        <!-- System Monitor -->
+        <div class="card-sys">
+          <p class="sec-label">System monitor</p>
+          <div class="metric-row">
+            <div class="metric-label-val">
+              <span class="metric-label">CPU</span>
+              <span class="metric-val" id="cpu-val">22%</span>
+            </div>
+            <div class="metric-track">
+              <div class="metric-fill-cpu" id="cpu-bar"></div>
+            </div>
+          </div>
+          <div class="metric-row" style="margin-bottom:10px">
+            <div class="metric-label-val">
+              <span class="metric-label">Memory</span>
+              <span class="metric-val" id="mem-val">68%</span>
+            </div>
+            <div class="metric-track">
+              <div class="metric-fill-mem" id="mem-bar"></div>
+            </div>
+          </div>
+          <div class="grid-stats">
+            <div>
+              <p class="stat-title">Network</p>
+              <p class="stat-val" id="net-val">14 KB/s</p>
+            </div>
+            <div>
+              <p class="stat-title">Uptime</p>
+              <p class="stat-val" id="uptime-val">95:10</p>
+            </div>
+            <div>
+              <p class="stat-title">Processes</p>
+              <p class="stat-val" id="proc-val">295</p>
+            </div>
+            <div>
+              <p class="stat-title">OS</p>
+              <p class="stat-val">Windows</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="card-controls">
+          <p class="sec-label" style="margin:0 0 2px">Controls</p>
+          <button class="ctrl-btn active" onclick="toast('Remote control active')">
+            <i class="ti ti-broadcast" aria-hidden="true"></i>Remote control
+          </button>
+          <button class="ctrl-btn active" id="btn-wake-ctrl" onclick="doWake()">
+            <i class="ti ti-microphone" aria-hidden="true"></i><span id="wake-ctrl-label">Wake word: on</span>
+          </button>
+          <button class="ctrl-btn" onclick="toast('Voice auth active')">
+            <i class="ti ti-fingerprint" aria-hidden="true"></i>Voice auth
+          </button>
+          <button class="ctrl-btn" onclick="toast('Audio devices managed in AGENT HUD')">
+            <i class="ti ti-headphones" aria-hidden="true"></i>Audio devices
+          </button>
+          <button class="ctrl-btn" onclick="toast('Memory overlay active in AGENT HUD')">
+            <i class="ti ti-brain" aria-hidden="true"></i>Memory
+          </button>
+          <div class="ctrl-sub-grid">
+            <button class="ctrl-mini-btn" onclick="_toggleFullscreen()" aria-label="Fullscreen" title="Toggle Fullscreen">
+              <i class="ti ti-maximize" aria-hidden="true"></i>
+            </button>
+            <button class="ctrl-mini-btn" onclick="doMic()" aria-label="Push to talk" title="Push to talk">
+              <i class="ti ti-hand-click" aria-hidden="true"></i>
+            </button>
+            <button class="ctrl-mini-btn" onclick="toast('Create shortcut available in AGENT desktop HUD')" aria-label="Shortcut" title="Shortcut">
+              <i class="ti ti-layout-grid-add" aria-hidden="true"></i>
+            </button>
+          </div>
+          <!-- Hidden compatible wake anchor -->
+          <button class="btn btn-wake" id="wake" onclick="doWake()">WAKE</button>
+        </div>
+      </div>
+
+      <!-- ── CENTER COLUMN: Status Core + File Drop ── -->
+      <div class="col-center">
+        <!-- Core Status -->
+        <div class="card-core">
+          <svg width="180" height="180" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="94" fill="none" stroke="#262a28" stroke-width="0.5"/>
+            <g stroke="#2ee672" stroke-width="1.5">
+              <line x1="100" y1="6" x2="100" y2="16"/>
+              <line x1="100" y1="184" x2="100" y2="194"/>
+              <line x1="6" y1="100" x2="16" y2="100"/>
+              <line x1="184" y1="100" x2="194" y2="100"/>
+            </g>
+            <circle cx="100" cy="100" r="70" fill="none" stroke="#235a3f" stroke-width="0.5" stroke-dasharray="4 6"/>
+            <circle cx="100" cy="100" r="46" fill="#0e2a20" stroke="#2ee672" stroke-width="0.5"/>
+            <path d="M72 108 Q100 84 128 108" fill="none" stroke="#4fe28c" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="86" cy="98" r="2.5" fill="#4fe28c"/>
+            <circle cx="114" cy="98" r="2.5" fill="#4fe28c"/>
+          </svg>
+          <p class="core-title">Agent</p>
+          <p class="core-sub">A friendly assistant</p>
+          <div class="pill" id="pill" onclick="doWake()">
+            <div class="dot"></div>
+            <span id="st">Sleeping — say "Agent" to wake</span>
+          </div>
+        </div>
+
+        <!-- File Drop Zone -->
+        <div class="card-drop" id="drop-zone" title="Drop a file or click to browse">
+          <i class="ti ti-upload" aria-hidden="true"></i>
+          <p class="drop-primary">Drop a file or click to browse</p>
+          <p class="drop-hint">Images, audio, PDF, docs, code</p>
+          <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
+        </div>
+      </div>
+
+      <!-- ── RIGHT COLUMN: Activity Log (Full Height) ── -->
+      <div class="col-right">
+        <div class="act-header">
+          <p class="act-title">Activity log</p>
+          <span class="act-badge">live</span>
+        </div>
+        <div id="feed">
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Voice active — Kore.</div>
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Agent online — sleeping.</div>
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Say "Agent" to wake me.</div>
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> HUD switched to reactor core.</div>
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Wake word engine idle.</div>
+          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Microphone check passed.</div>
+        </div>
+        <div class="act-foot-badges">
+          <div class="act-badge-item">
+            <i class="ti ti-shield-check" style="color:var(--green-accent)" aria-hidden="true"></i>
+            <p>Sec cleared</p>
+          </div>
+          <div class="act-badge-item">
+            <i class="ti ti-cpu" style="color:var(--green-accent)" aria-hidden="true"></i>
+            <p>Core active</p>
+          </div>
+          <div class="act-badge-item">
+            <i class="ti ti-lock" style="color:var(--text-gray)" aria-hidden="true"></i>
+            <p>Protocol 001</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── BOTTOM COMMAND BAR ── -->
+    <footer class="bottom-bar">
+      <input type="text" id="inp" placeholder="Type a command or question…" autocomplete="off">
+      <div class="audio-bars" id="audio-bars">
+        <div class="audio-bar" style="height:8px"></div>
+        <div class="audio-bar" style="height:16px"></div>
+        <div class="audio-bar" style="height:10px"></div>
+        <div class="audio-bar" style="height:18px"></div>
+      </div>
+      <button class="btn-send" onclick="doSend()" aria-label="Send" title="Send command">
+        <i class="ti ti-send" aria-hidden="true"></i>
+      </button>
+      <button class="btn-interrupt" onclick="doInterrupt()" title="Interrupt assistant">
+        <i class="ti ti-hand-stop" aria-hidden="true"></i>Interrupt
+      </button>
+      <button id="mic-btn" onclick="doMic()" title="Voice command">
+        <i class="ti ti-microphone" aria-hidden="true"></i><span>Mic active</span>
+      </button>
+    </footer>
+  </div>
 
   <script>
     // ── Auth — bearer token ───────────────────────────────────────────────────
@@ -223,10 +937,17 @@
     };
 
     function setStatus(s) {
+      const wakeCtrlLbl = document.getElementById('wake-ctrl-label');
       if (s === 'active') {
-        pill.className = 'pill on'; stTxt.textContent = 'Active'; wake.classList.remove('show');
+        pill.className = 'pill on';
+        stTxt.textContent = 'Active — listening';
+        if (wake) wake.classList.remove('show');
+        if (wakeCtrlLbl) wakeCtrlLbl.textContent = 'Wake word: active';
       } else {
-        pill.className = 'pill'; stTxt.textContent = 'Sleeping'; wake.classList.add('show');
+        pill.className = 'pill';
+        stTxt.textContent = 'Sleeping — say "Agent" to wake';
+        if (wake) wake.classList.add('show');
+        if (wakeCtrlLbl) wakeCtrlLbl.textContent = 'Wake word: on';
       }
     }
 
@@ -234,10 +955,10 @@
       const d = document.createElement('div');
       if (speaker === 'jarvis') {
         d.className = 'msg msg-j';
-        d.innerHTML = `<div class="lbl">Agent</div>${esc(text)}`;
+        d.innerHTML = `<div class="lbl">Agent</div><div>${esc(text)}</div>`;
       } else {
         d.className = 'msg msg-u';
-        d.innerHTML = `<div class="lbl">You</div>${esc(text)}`;
+        d.innerHTML = `<div class="lbl">You</div><div>${esc(text)}</div>`;
       }
       feed.appendChild(d);
       feed.scrollTop = feed.scrollHeight;
@@ -245,12 +966,52 @@
 
     function sys(text) {
       const d = document.createElement('div');
-      d.className = 'msg msg-sys'; d.textContent = text;
-      feed.appendChild(d); feed.scrollTop = feed.scrollHeight;
+      d.className = 'msg msg-sys';
+      const clean = text.replace(/^SYS:?\s*/i, '');
+      d.innerHTML = `<span class="sys-badge">SYS</span> ${esc(clean)}`;
+      feed.appendChild(d);
+      feed.scrollTop = feed.scrollHeight;
     }
 
     function esc(s) {
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // ── Live Clock & Date ─────────────────────────────────────────────────────
+    function _updateClock() {
+      const now = new Date();
+      const dEl = document.getElementById('top-date');
+      const tEl = document.getElementById('top-time');
+      if (dEl) {
+        dEl.textContent = now.toLocaleDateString('en-GB', {
+          weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+        });
+      }
+      if (tEl) {
+        tEl.textContent = now.toLocaleTimeString('en-GB', { hour12: false });
+      }
+    }
+    setInterval(_updateClock, 1000);
+    _updateClock();
+
+    // ── Fullscreen toggle ─────────────────────────────────────────────────────
+    function _toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    // ── Interrupt ─────────────────────────────────────────────────────────────
+    function doInterrupt() {
+      _authFetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'stop' })
+      });
+      sys('Interrupt signal sent.');
+      toast('Interrupt sent');
     }
 
     // ── File helpers ──────────────────────────────────────────────────────────
@@ -318,7 +1079,7 @@
           let savedName = file.name;
           try { savedName = JSON.parse(xhr.responseText).name || file.name; } catch {}
           const dlUrl = `/uploads/${encodeURIComponent(savedName)}?token=${encodeURIComponent(_authToken)}`;
-          if (bar)  { bar.style.width = '100%'; bar.style.background = 'var(--green)'; }
+          if (bar)  { bar.style.width = '100%'; bar.style.background = 'var(--green-accent)'; }
           if (st)   { st.textContent = '✓'; st.className = 'fc-status done'; }
           if (lbl)  lbl.textContent = 'Sent';
           if (meta) meta.insertAdjacentHTML('beforeend',
@@ -327,7 +1088,7 @@
         } else {
           let errMsg = 'Upload failed';
           try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch {}
-          if (bar) bar.style.background = '#f87171';
+          if (bar) bar.style.background = 'var(--red-text)';
           if (st)  { st.textContent = 'ERR'; st.className = 'fc-status err'; }
           if (lbl) lbl.textContent = errMsg;
         }
@@ -345,7 +1106,7 @@
       xhr.send(fd);
     }
 
-    // File received by another WebSocket client (e.g., second open tab)
+    // File received by another WebSocket client
     function _onFileReceived(m) {
       const dlUrl = `/uploads/${encodeURIComponent(m.name)}?token=${encodeURIComponent(_authToken)}`;
       const card  = document.createElement('div');
@@ -366,10 +1127,31 @@
     }
 
     // File input change handler
-    document.getElementById('file-inp').addEventListener('change', function () {
+    const fileInp = document.getElementById('file-inp');
+    fileInp.addEventListener('change', function () {
       Array.from(this.files).forEach(_uploadFile);
-      this.value = ''; // reset so the same file can be re-sent
+      this.value = '';
     });
+
+    // Drop zone drag and drop handlers
+    const dropZone = document.getElementById('drop-zone');
+    if (dropZone) {
+      dropZone.addEventListener('click', () => fileInp.click());
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('drag-over');
+      });
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('drag-over');
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('drag-over');
+        if (e.dataTransfer && e.dataTransfer.files.length) {
+          Array.from(e.dataTransfer.files).forEach(_uploadFile);
+        }
+      });
+    }
 
     // ── Commands ──────────────────────────────────────────────────────────────
     function doSend() {
@@ -413,7 +1195,7 @@
     let _audioNd  = null;
 
     function _micIdle() {
-      micBtn.innerHTML = '🎤';
+      micBtn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i><span>Mic active</span>';
       micBtn.title     = 'Voice — tap to speak';
       micBtn.classList.remove('recording');
     }
@@ -435,28 +1217,27 @@
     }
 
     function _showVoiceSetup() {
-      if (document.getElementById('voice-setup')) return; // show once
+      if (document.getElementById('voice-setup')) return;
       const origin = location.origin;
       const card = document.createElement('div');
       card.id = 'voice-setup';
       card.style.cssText = [
-        'align-self:stretch', 'background:rgba(99,102,241,0.07)',
-        'border:1px solid rgba(99,102,241,0.22)', 'border-radius:14px',
+        'align-self:stretch', 'background:var(--btn-bg)',
+        'border:1px solid var(--btn-border)', 'border-radius:14px',
         'padding:16px 18px', 'font-size:13px', 'line-height:1.8',
         'animation:pop 0.18s ease'
       ].join(';');
       card.innerHTML =
-        '<div style="font-weight:700;color:#818cf8;letter-spacing:.5px;margin-bottom:10px">🎤 One-time voice setup</div>' +
-        '<ol style="padding-left:18px;color:#8899aa;margin:0;display:flex;flex-direction:column;gap:4px">' +
+        '<div style="font-weight:700;color:var(--green-accent);letter-spacing:.5px;margin-bottom:10px">🎤 One-time voice setup</div>' +
+        '<ol style="padding-left:18px;color:var(--text-muted);margin:0;display:flex;flex-direction:column;gap:4px">' +
         '<li>Open a new tab → go to <span style="background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:4px;font-family:monospace;font-size:12px">chrome://flags</span></li>' +
-        '<li>Search: <strong style="color:#dde3ed">Insecure origins treated as secure</strong></li>' +
+        '<li>Search: <strong style="color:var(--text-white)">Insecure origins treated as secure</strong></li>' +
         '<li>Paste this URL into the box:<br><span id="flags-url" style="background:rgba(255,255,255,0.07);padding:2px 8px;border-radius:4px;font-family:monospace;font-size:11px;user-select:all;cursor:pointer">' + esc(origin) + '</span></li>' +
-        '<li>Set to <strong style="color:#22c55e">Enabled</strong> → tap <strong style="color:#dde3ed">Relaunch</strong></li>' +
+        '<li>Set to <strong style="color:var(--green-accent)">Enabled</strong> → tap <strong style="color:var(--text-white)">Relaunch</strong></li>' +
         '<li>Return here and tap 🎤</li>' +
         '</ol>';
       feed.appendChild(card);
       feed.scrollTop = feed.scrollHeight;
-      // tap to copy
       card.querySelector('#flags-url').addEventListener('click', () => {
         navigator.clipboard?.writeText(origin).then(() => toast('URL copied!')).catch(() => {});
       });
@@ -481,7 +1262,6 @@
         return;
       }
 
-      // 16 kHz context (fall back to native rate — _f32toPcm16 resamples)
       let ctx;
       try { ctx = new AudioContext({ sampleRate: 16000 }); }
       catch (_) { ctx = new AudioContext(); }
@@ -497,15 +1277,12 @@
         const rate = ctx.sampleRate;
         const src  = ctx.createMediaStreamSource(stream);
 
-        // AudioWorklet (modern) — runs in dedicated audio thread
         const wCode = `class J extends AudioWorkletProcessor{process(i){const c=i[0]?.[0];if(c)this.port.postMessage(c.slice());return true;}}registerProcessor('j',J);`;
         try {
           const burl = URL.createObjectURL(new Blob([wCode], { type: 'application/javascript' }));
           await ctx.audioWorklet.addModule(burl);
           URL.revokeObjectURL(burl);
           const nd = new AudioWorkletNode(ctx, 'j');
-          // Buffer to 1024 samples (64 ms at 16 kHz) before sending —
-          // matches PC mic chunk size, prevents queue flooding on the server.
           let _pbuf = [], _plen = 0;
           nd.port.onmessage = e => {
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
@@ -520,7 +1297,6 @@
           src.connect(nd);
           _audioNd = nd;
         } catch (_) {
-          // ScriptProcessor fallback (deprecated, still works everywhere)
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
             if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
@@ -529,7 +1305,7 @@
           _audioNd = sp;
         }
 
-        micBtn.innerHTML = '⏹';
+        micBtn.innerHTML = '<i class="ti ti-hand-stop" aria-hidden="true"></i><span>Recording…</span>';
         micBtn.title     = 'Tap to stop';
         micBtn.classList.add('recording');
         sys('Voice live — speak now');

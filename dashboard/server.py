@@ -11,6 +11,7 @@ Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 import asyncio
 import base64
 import hashlib
+import os
 import re
 import secrets
 import socket
@@ -484,6 +485,8 @@ class DashboardServer:
 
     @staticmethod
     def _ssl_enabled() -> bool:
+        if os.environ.get("DASHBOARD_NO_SSL") == "1":
+            return False
         certs = BASE_DIR / "config" / "certs"
         return (certs / "jarvis.key").exists() and (certs / "jarvis.crt").exists()
 
@@ -550,6 +553,12 @@ class DashboardServer:
                                     media_type="application/javascript")
             from fastapi.responses import RedirectResponse
             return RedirectResponse(_CRYPTOJS_CDN)
+
+        try:
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        except Exception:
+            pass
 
         @app.get("/login", response_class=HTMLResponse)
         async def login_page():
