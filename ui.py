@@ -949,6 +949,7 @@ class HudCanvas(QWidget):
         p.end()
 
 class MetricBar(QWidget):
+    value_changed = pyqtSignal(float, str)
 
     def __init__(self, label: str, color: str = C.PRI, parent=None):
         super().__init__(parent)
@@ -966,6 +967,7 @@ class MetricBar(QWidget):
         self._value = v
         self._text  = text
         self.update()
+        self.value_changed.emit(self._value, self._text)
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -3201,6 +3203,10 @@ class MainWindow(QMainWindow):
         sc_mute.activated.connect(self._toggle_mute)
         sc_full = QShortcut(QKeySequence("F11"), self)
         sc_full.activated.connect(self._toggle_fullscreen)
+
+        # Floating Island companion widget
+        from floating_island import FloatingIsland
+        self._floating_island = FloatingIsland(self)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
 
@@ -3630,6 +3636,14 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
+    def toggle_floating_island(self):
+        if hasattr(self, "_floating_island") and self._floating_island:
+            if self._floating_island.isVisible():
+                self._floating_island.hide()
+            else:
+                self._floating_island.show()
+                self._floating_island.raise_()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         cw = self.centralWidget()
@@ -3751,17 +3765,24 @@ class MainWindow(QMainWindow):
         brand.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
         lay.addWidget(brand)
 
-        ver_badge = QLabel("agent 001")
-        ver_badge.setFont(_app_font(8))
+        ver_badge = QPushButton("agent 001")
+        ver_badge.setFont(_app_font(8, bold=True))
+        ver_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        ver_badge.setToolTip("Toggle Floating Island companion")
         ver_badge.setStyleSheet(f"""
-            QLabel {{
+            QPushButton {{
                 color: {C.TEXT_DIM};
                 background: {C.BTN_BG};
                 border: 1px solid {C.BTN_BORDER};
                 border-radius: 10px;
                 padding: 2px 8px;
             }}
+            QPushButton:hover {{
+                border-color: {C.PRI};
+                color: {C.WHITE};
+            }}
         """)
+        ver_badge.clicked.connect(self.toggle_floating_island)
         lay.addWidget(ver_badge)
 
         lay.addStretch()
@@ -5826,3 +5847,8 @@ class AgentUI:
     def stop_speaking(self):
         if not self.muted:
             self.set_state("LISTENING")
+
+
+# Export FloatingIsland
+from floating_island import FloatingIsland
+
