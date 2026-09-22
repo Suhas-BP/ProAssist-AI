@@ -28,7 +28,7 @@ from PyQt6.QtGui import (
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar, QInputDialog,
 )
@@ -69,10 +69,10 @@ APP_VERSION  = "AGENT 001"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 APP_BRAND    = "ProAssist-AI"
 
-_DEFAULT_W, _DEFAULT_H = 980, 700
-_MIN_W,     _MIN_H     = 820, 580
-_LEFT_W  = 148
-_RIGHT_W = 340
+_DEFAULT_W, _DEFAULT_H = 1040, 720
+_MIN_W,     _MIN_H     = 880, 600
+_LEFT_W  = 230
+_RIGHT_W = 260
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -3012,8 +3012,8 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_header())
 
         body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
+        body.setContentsMargins(8, 8, 8, 8)
+        body.setSpacing(8)
 
         self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
@@ -3021,6 +3021,7 @@ class MainWindow(QMainWindow):
         # Center column: HUD + resizable content panel via QSplitter
         self.hud = HudCanvas(face_path, _display)
         self.hud.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._drop_container = self._build_drop_panel()
         self._content_panel = self._build_content_panel()
         self._quiz_panel = self._build_quiz_panel()
 
@@ -3074,9 +3075,10 @@ class MainWindow(QMainWindow):
             }}
         """)
         self._center_split.addWidget(self._hud_cam_stack)
+        self._center_split.addWidget(self._drop_container)
         self._center_split.addWidget(self._content_panel)
         self._center_split.addWidget(self._quiz_panel)
-        self._center_split.setStretchFactor(0, 3)
+        self._center_split.setStretchFactor(0, 4)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
         body.addWidget(self._center_split, stretch=5)
@@ -3085,6 +3087,7 @@ class MainWindow(QMainWindow):
         body.addWidget(self._right_panel, stretch=0)
 
         root.addLayout(body, stretch=1)
+        root.addWidget(self._build_bottom_bar())
         root.addWidget(self._build_footer())
 
         # Quick-access drawer (floating overlay, built after central widget layout is done)
@@ -3620,11 +3623,13 @@ class MainWindow(QMainWindow):
         # NET
         net = snap["net"]
         if net < 1.0:
-            net_str = f"{net*1024:.0f}KB/s"
+            net_str = f"{net*1024:.0f} KB/s"
         else:
-            net_str = f"{net:.1f}MB/s"
+            net_str = f"{net:.1f} MB/s"
         net_pct = min(100, net * 10)  # 10 MB/s = %100
         self._bar_net.set_value(net_pct, net_str)
+        if hasattr(self, '_net_val_lbl'):
+            self._net_val_lbl.setText(net_str)
 
         # GPU
         gpu = snap["gpu"]
@@ -3646,15 +3651,19 @@ class MainWindow(QMainWindow):
             elapsed = time.time() - boot_t
             h = int(elapsed // 3600)
             m = int((elapsed % 3600) // 60)
-            self._uptime_lbl.setText(f"UP  {h:02d}:{m:02d}")
+            self._uptime_lbl.setText(f"{h:02d}:{m:02d}")
         except Exception:
-            self._uptime_lbl.setText("UP  --:--")
+            self._uptime_lbl.setText("--:--")
 
         try:
             proc_count = len(psutil.pids())
-            self._proc_lbl.setText(f"PROC  {proc_count}")
+            self._proc_lbl.setText(f"{proc_count}")
         except Exception:
-            self._proc_lbl.setText("PROC  --")
+            self._proc_lbl.setText("--")
+
+        if hasattr(self, '_os_lbl'):
+            os_name = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}.get(_OS, _OS)
+            self._os_lbl.setText(os_name)
 
 
     def _build_header(self) -> QWidget:
@@ -3729,142 +3738,298 @@ class MainWindow(QMainWindow):
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
         w.setFixedWidth(_LEFT_W)
-        w.setStyleSheet(f"background: {C.PANEL}; border-right: 1px solid {C.BORDER};")
+        w.setStyleSheet("background: transparent;")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 10, 8, 10)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
 
-        hdr = QLabel("◈ SYS MONITOR")
-        hdr.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-        hdr.setStyleSheet(f"color: {C.PRI}; background: transparent; "
-                          f"border-bottom: 1px solid {C.BORDER}; padding-bottom: 4px;")
-        lay.addWidget(hdr)
-        lay.addSpacing(2)
+        # ── Card 1: System monitor ──────────────────────────────────────────
+        mon_card = QWidget()
+        mon_card.setStyleSheet(f"""
+            QWidget {{
+                background: {C.PANEL};
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        mon_lay = QVBoxLayout(mon_card)
+        mon_lay.setContentsMargins(12, 10, 12, 10)
+        mon_lay.setSpacing(8)
 
+        hdr = QLabel("System monitor")
+        hdr.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
+        mon_lay.addWidget(hdr)
+
+        # Metric bars (preserving existing instances)
         self._bar_cpu = MetricBar("CPU", C.GREEN)
-        self._bar_mem = MetricBar("MEM", C.ACC)
+        self._bar_mem = MetricBar("Memory", C.ACC)
         self._bar_net = MetricBar("NET", C.PRI)
         self._bar_gpu = MetricBar("GPU", C.PRI)
         self._bar_tmp = MetricBar("TMP", C.RED)
+        mon_lay.addWidget(self._bar_cpu)
+        mon_lay.addWidget(self._bar_mem)
 
-        for bar in [self._bar_cpu, self._bar_mem, self._bar_net,
-                    self._bar_gpu, self._bar_tmp]:
-            lay.addWidget(bar)
+        # 2x2 stats grid: Network, Uptime, Processes, OS
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(4)
 
-        lay.addSpacing(4)
+        def _grid_item(title: str, val_lbl: QLabel, r: int, c: int):
+            t = QLabel(title)
+            t.setFont(QFont("Courier New", 7))
+            t.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            grid.addWidget(t, r * 2, c)
+            val_lbl.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+            val_lbl.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
+            grid.addWidget(val_lbl, r * 2 + 1, c)
 
-        info_panel = QWidget()
-        info_panel.setStyleSheet(
-            f"background: {C.PANEL}; border: 1px solid {C.BORDER}; border-radius: 4px;"
-        )
-        ip_lay = QVBoxLayout(info_panel)
-        ip_lay.setContentsMargins(6, 5, 6, 5)
-        ip_lay.setSpacing(3)
+        self._net_val_lbl = QLabel("-- KB/s")
+        self._uptime_lbl  = QLabel("--:--")
+        self._proc_lbl    = QLabel("--")
+        os_name = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}.get(_OS, _OS)
+        self._os_lbl      = QLabel(os_name)
 
-        self._uptime_lbl = QLabel("UP  --:--")
-        self._uptime_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
-        self._uptime_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
-        ip_lay.addWidget(self._uptime_lbl)
+        _grid_item("Network",   self._net_val_lbl, 0, 0)
+        _grid_item("Uptime",    self._uptime_lbl,  0, 1)
+        _grid_item("Processes", self._proc_lbl,    1, 0)
+        _grid_item("OS",        self._os_lbl,      1, 1)
+        mon_lay.addLayout(grid)
+        lay.addWidget(mon_card)
 
-        self._proc_lbl = QLabel("PROC  --")
-        self._proc_lbl.setFont(QFont("Courier New", 8))
-        self._proc_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
-        ip_lay.addWidget(self._proc_lbl)
+        # ── Card 2: Controls ────────────────────────────────────────────────
+        ctrl_card = QWidget()
+        ctrl_card.setStyleSheet(f"""
+            QWidget {{
+                background: {C.PANEL};
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        ctrl_lay = QVBoxLayout(ctrl_card)
+        ctrl_lay.setContentsMargins(12, 10, 12, 10)
+        ctrl_lay.setSpacing(6)
 
-        os_name = {"Windows": "WIN", "Darwin": "macOS", "Linux": "LINUX"}.get(_OS, _OS.upper())
-        os_lbl = QLabel(f"OS  {os_name}")
-        os_lbl.setFont(QFont("Courier New", 8))
-        os_lbl.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent; border: none;")
-        ip_lay.addWidget(os_lbl)
+        ctrl_hdr = QLabel("Controls")
+        ctrl_hdr.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        ctrl_hdr.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
+        ctrl_lay.addWidget(ctrl_hdr)
 
-        lay.addWidget(info_panel)
-        lay.addSpacing(4)
+        def _ctrl_btn(txt: str, ico_name: str, active: bool = False):
+            b = QPushButton(f"  {txt}")
+            b.setFixedHeight(30)
+            b.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setIcon(icon(ico_name, active=active))
+            b.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.ACT_BG if active else C.BTN_BG};
+                    color: {C.GREEN if active else C.TEXT_MED};
+                    border: 1px solid {C.ACT_BORDER if active else C.BTN_BORDER};
+                    border-radius: 6px;
+                    text-align: left; padding-left: 10px;
+                }}
+                QPushButton:hover {{
+                    background: {'#13382b' if active else C.BTN_BG};
+                    border-color: {C.PRI}; color: {C.WHITE};
+                }}
+            """)
+            return b
 
+        remote_btn = _ctrl_btn("Remote control", "broadcast", active=True)
+        remote_btn.clicked.connect(self._open_remote)
+        ctrl_lay.addWidget(remote_btn)
+
+        self._wake_btn = _ctrl_btn("Wake word: on", "microphone", active=True)
+        self._wake_btn.clicked.connect(self._toggle_wake_word)
+        ctrl_lay.addWidget(self._wake_btn)
+
+        self._wake_sleep_btn = QPushButton()
+        self._wake_sleep_btn.hide()
+
+        auth_btn = _ctrl_btn("Voice auth", "fingerprint")
+        auth_btn.clicked.connect(self._enroll_voice_auth)
+        ctrl_lay.addWidget(auth_btn)
+
+        audio_btn = _ctrl_btn("Audio devices", "headphones")
+        audio_btn.clicked.connect(self._open_audio_devices)
+        ctrl_lay.addWidget(audio_btn)
+
+        mem_btn = _ctrl_btn("Memory", "brain")
+        mem_btn.clicked.connect(self._open_memory_panel)
+        ctrl_lay.addWidget(mem_btn)
+
+        # 3-icon action row: Fullscreen, Push-to-talk, Desktop Shortcut
+        t_row = QHBoxLayout()
+        t_row.setSpacing(6)
+
+        def _icon_box(ico_name: str, tip: str, cb):
+            b = QPushButton()
+            b.setFixedHeight(30)
+            b.setIcon(icon(ico_name))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(tip)
+            b.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C.BTN_BG}; border: 1px solid {C.BTN_BORDER}; border-radius: 6px;
+                }}
+                QPushButton:hover {{ border-color: {C.PRI}; }}
+            """)
+            b.clicked.connect(cb)
+            return b
+
+        fs_btn = _icon_box("maximize", "Fullscreen [F11]", self._toggle_fullscreen)
+        self._ptt_btn = _icon_box("hand-click", "Push to talk", self._toggle_ptt)
+        sc_btn = _icon_box("layout-grid-add", "Create Shortcut", self._create_desktop_shortcut)
+        t_row.addWidget(fs_btn)
+        t_row.addWidget(self._ptt_btn)
+        t_row.addWidget(sc_btn)
+        ctrl_lay.addLayout(t_row)
+
+        lay.addWidget(ctrl_card)
         lay.addStretch()
-
-        for txt, col in [
-            ("AI CORE\nACTIVE",  C.GREEN),
-            ("SEC\nCLEARED",     C.PRI),
-            ("PROTOCOL\n" + APP_PROTOCOL,   C.TEXT_DIM),
-        ]:
-            lbl = QLabel(txt)
-            lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet(
-                f"color: {col}; background: {C.PANEL};"
-                f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px;"
-            )
-            lay.addWidget(lbl)
-
         return w
-    def _build_right_panel(self) -> QWidget:
+
+    def _build_drop_panel(self) -> QWidget:
+        """Repositioned FileDropZone card beneath HudCanvas."""
         w = QWidget()
-        w.setFixedWidth(_RIGHT_W)
-        w.setStyleSheet(f"background: {C.PANEL}; border-left: 1px solid {C.BORDER};")
+        w.setFixedHeight(120)
+        w.setStyleSheet(f"""
+            QWidget {{
+                background: {C.PANEL};
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(4)
 
-        def _sec(txt):
-            l = QLabel(f"▸ {txt}")
-            l.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
-            l.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
-            return l
-
-        lay.addWidget(_sec("ACTIVITY LOG"))
-        self._log = LogWidget()
-        lay.addWidget(self._log, stretch=1)
-
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
-        lay.addWidget(sep)
-
-        lay.addWidget(_sec("FILE UPLOAD"))
         self._drop_zone = FileDropZone()
         self._drop_zone.file_selected.connect(self._on_file_selected)
         lay.addWidget(self._drop_zone)
 
-        self._file_hint = QLabel("No file loaded — drop or click above to upload")
+        self._file_hint = QLabel("Images, audio, PDF, docs, code")
         self._file_hint.setFont(QFont("Courier New", 7))
-        self._file_hint.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
-        self._file_hint.setWordWrap(True)
+        self._file_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._file_hint.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
         lay.addWidget(self._file_hint)
+        return w
 
-        sep2 = QFrame(); sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
-        lay.addWidget(sep2)
+    def _build_right_panel(self) -> QWidget:
+        w = QWidget()
+        w.setFixedWidth(_RIGHT_W)
+        w.setStyleSheet(f"""
+            QWidget {{
+                background: {C.PANEL};
+                border: 1px solid {C.BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
 
-        lay.addWidget(_sec("COMMAND INPUT"))
-        lay.addLayout(self._build_input_row())
+        # Activity log header with 'live' badge
+        hdr_lay = QHBoxLayout()
+        hdr = QLabel("Activity log")
+        hdr.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        hdr.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
+        hdr_lay.addWidget(hdr)
+        hdr_lay.addStretch()
+        live_lbl = QLabel("● live")
+        live_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        live_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent; border: none;")
+        hdr_lay.addWidget(live_lbl)
+        lay.addLayout(hdr_lay)
 
-        self._interrupt_btn = QPushButton(" INTERRUPT  [ESC]")
+        # LogWidget stretched full height
+        self._log = LogWidget()
+        lay.addWidget(self._log, stretch=1)
+
+        # Pinned 3-icon status strip at bottom of right column
+        strip = QHBoxLayout()
+        strip.setSpacing(6)
+        def _status_col(ico_name: str, title: str):
+            c = QWidget()
+            c.setStyleSheet(f"background: {C.PANEL}; border: 1px solid {C.BORDER}; border-radius: 6px;")
+            cl = QVBoxLayout(c)
+            cl.setContentsMargins(4, 4, 4, 4)
+            cl.setSpacing(2)
+            ib = QPushButton()
+            ib.setIcon(icon(ico_name, active=True))
+            ib.setStyleSheet("background: transparent; border: none;")
+            ib.setFixedHeight(18)
+            tl = QLabel(title)
+            tl.setFont(QFont("Courier New", 6))
+            tl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            tl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            cl.addWidget(ib)
+            cl.addWidget(tl)
+            return c
+
+        strip.addWidget(_status_col("shield-check", "Sec cleared"))
+        strip.addWidget(_status_col("cpu",          "Core active"))
+        strip.addWidget(_status_col("lock",         f"Protocol {APP_PROTOCOL}"))
+        lay.addLayout(strip)
+        return w
+
+    def _build_bottom_bar(self) -> QWidget:
+        """Docked bottom command bar spanning across window width."""
+        w = QWidget()
+        w.setFixedHeight(48)
+        w.setStyleSheet(f"""
+            QWidget {{
+                background: {C.PANEL};
+                border-top: 1px solid {C.BORDER};
+            }}
+        """)
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(12, 6, 12, 6)
+        lay.setSpacing(8)
+
+        # Re-use input row
+        lay.addLayout(self._build_input_row(), stretch=1)
+
+        # Middle waveform / action button
+        mid_btn = QPushButton()
+        mid_btn.setIcon(icon("headphones"))
+        mid_btn.setFixedSize(32, 32)
+        mid_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mid_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.BTN_BG}; border: 1px solid {C.BTN_BORDER}; border-radius: 6px;
+            }}
+            QPushButton:hover {{ border-color: {C.PRI}; }}
+        """)
+        mid_btn.clicked.connect(self._open_audio_devices)
+        lay.addWidget(mid_btn)
+
+        # Interrupt button
+        self._interrupt_btn = QPushButton(" Interrupt")
         self._interrupt_btn.setIcon(icon("hand-stop"))
-        self._interrupt_btn.setFixedHeight(34)
+        self._interrupt_btn.setFixedHeight(32)
         self._interrupt_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         self._interrupt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._interrupt_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {C.DANGER_BG}; color: {C.DANGER_TEXT};
-                border: 1px solid {C.DANGER_BORDER}; border-radius: 3px;
+                border: 1px solid {C.DANGER_BORDER}; border-radius: 6px;
+                padding: 0 12px;
             }}
-            QPushButton:hover {{
-                background: #381a1a; border: 1px solid {C.DANGER_TEXT};
-            }}
-            QPushButton:pressed {{
-                background: #1e0e0e;
-            }}
+            QPushButton:hover {{ background: #381a1a; }}
         """)
         self._interrupt_btn.clicked.connect(self._do_interrupt)
         lay.addWidget(self._interrupt_btn)
 
-        self._mute_btn = QPushButton("🎙  MICROPHONE ACTIVE")
-        self._mute_btn.setFixedHeight(30)
+        # Mute button
+        self._mute_btn = QPushButton(" Mic active")
+        self._mute_btn.setFixedHeight(32)
         self._mute_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         self._mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mute_btn.clicked.connect(self._toggle_mute)
         self._style_mute_btn()
         lay.addWidget(self._mute_btn)
-
         return w
 
     def _build_quick_drawer(self) -> QWidget:
@@ -3959,12 +4124,12 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._brief_btn)
 
         # ── Wake word ──────────────────────────────────────────────────────────
-        self._wake_btn = QPushButton()
-        self._wake_btn.setFixedHeight(26)
-        self._wake_btn.setFont(QFont("Courier New", 7))
-        self._wake_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._wake_btn.clicked.connect(self._toggle_wake_word)
-        lay.addWidget(self._wake_btn)
+        self._drawer_wake_btn = QPushButton()
+        self._drawer_wake_btn.setFixedHeight(26)
+        self._drawer_wake_btn.setFont(QFont("Courier New", 7))
+        self._drawer_wake_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._drawer_wake_btn.clicked.connect(self._toggle_wake_word)
+        lay.addWidget(self._drawer_wake_btn)
 
         self._wake_sleep_btn = QPushButton()
         self._wake_sleep_btn.setFixedHeight(26)
@@ -3974,9 +4139,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._wake_sleep_btn)
         # Neutral placeholder now; the real state (which may load the model to
         # check readiness) is resolved lazily the first time the drawer opens.
-        self._wake_btn.setText(" WAKE WORD")
-        self._wake_btn.setIcon(icon("microphone"))
-        self._wake_btn.setStyleSheet(_BTN_STYLE_DIM)
+        self._drawer_wake_btn.setText(" WAKE WORD")
+        self._drawer_wake_btn.setIcon(icon("microphone"))
+        self._drawer_wake_btn.setStyleSheet(_BTN_STYLE_DIM)
         self._wake_sleep_btn.hide()
 
         auth_btn = QPushButton(" VOICE AUTH: ENROLL PRIMARY USER")
@@ -3988,12 +4153,12 @@ class MainWindow(QMainWindow):
         auth_btn.clicked.connect(self._enroll_voice_auth)
         lay.addWidget(auth_btn)
 
-        self._ptt_btn = QPushButton()
-        self._ptt_btn.setFixedHeight(26)
-        self._ptt_btn.setFont(QFont("Courier New", 7))
-        self._ptt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._ptt_btn.clicked.connect(self._toggle_ptt)
-        lay.addWidget(self._ptt_btn)
+        self._drawer_ptt_btn = QPushButton()
+        self._drawer_ptt_btn.setFixedHeight(26)
+        self._drawer_ptt_btn.setFont(QFont("Courier New", 7))
+        self._drawer_ptt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._drawer_ptt_btn.clicked.connect(self._toggle_ptt)
+        lay.addWidget(self._drawer_ptt_btn)
 
         self._refresh_talk_btns()
 
@@ -4739,64 +4904,83 @@ class MainWindow(QMainWindow):
         return {"ready": ready, "enabled": enabled, "awake": True}
 
     def _refresh_wake_btns(self):
-        if not hasattr(self, '_wake_btn'):
+        btns = [b for b in (getattr(self, '_wake_btn', None), getattr(self, '_drawer_wake_btn', None)) if b is not None]
+        if not btns:
             return
         st = self._wake_state()
         _on = f"""
             QPushButton {{ background: {C.ACT_BG}; color: {C.GREEN};
-                border: 1px solid {C.ACT_BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px; }}
+                border: 1px solid {C.ACT_BORDER}; border-radius: 6px;
+                text-align: left; padding: 0 10px; }}
             QPushButton:hover {{ background: #13382b; }}"""
         _off = f"""
             QPushButton {{ background: {C.BTN_BG}; color: {C.TEXT_DIM};
-                border: 1px solid {C.BTN_BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px; }}
+                border: 1px solid {C.BTN_BORDER}; border-radius: 6px;
+                text-align: left; padding: 0 10px; }}
             QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER}; }}"""
-        self._wake_btn.setEnabled(True)
-        if not st["ready"]:
-            self._wake_btn.setText(" WAKE WORD: DOWNLOAD")
-            self._wake_btn.setIcon(icon("microphone", active=False))
-            self._wake_btn.setStyleSheet(_off)
-            self._wake_sleep_btn.hide()
-        elif st["enabled"]:
-            self._wake_btn.setText(" WAKE WORD: ON")
-            self._wake_btn.setIcon(icon("microphone", active=True))
-            self._wake_btn.setStyleSheet(_on)
-            self._wake_sleep_btn.show()
-            self._wake_sleep_btn.setText("😴  SLEEP NOW" if st["awake"] else "👂  WAKE NOW")
-            self._wake_sleep_btn.setStyleSheet(_off)
-        else:
-            self._wake_btn.setText(" WAKE WORD: OFF")
-            self._wake_btn.setIcon(icon("microphone", active=False))
-            self._wake_btn.setStyleSheet(_off)
-            self._wake_sleep_btn.hide()
+        for b in btns:
+            b.setEnabled(True)
+            if not st["ready"]:
+                b.setText("  Wake word: DL")
+                b.setIcon(icon("microphone", active=False))
+                b.setStyleSheet(_off)
+            elif st["enabled"]:
+                b.setText("  Wake word: on")
+                b.setIcon(icon("microphone", active=True))
+                b.setStyleSheet(_on)
+            else:
+                b.setText("  Wake word: off")
+                b.setIcon(icon("microphone", active=False))
+                b.setStyleSheet(_off)
+
+        if hasattr(self, '_wake_sleep_btn'):
+            if not st["ready"] or not st["enabled"]:
+                self._wake_sleep_btn.hide()
+            else:
+                self._wake_sleep_btn.show()
+                self._wake_sleep_btn.setText("😴  SLEEP NOW" if st["awake"] else "👂  WAKE NOW")
+                self._wake_sleep_btn.setStyleSheet(_off)
 
     def _refresh_talk_btns(self):
-        """Repaint the push-to-talk row from the saved setting."""
-        if not hasattr(self, "_ptt_btn"):
+        """Repaint the push-to-talk buttons from the saved setting."""
+        btns = [b for b in (getattr(self, '_ptt_btn', None), getattr(self, '_drawer_ptt_btn', None)) if b is not None]
+        if not btns:
             return
         from core.hotkey import chord_label
         from memory.config_manager import get_push_to_talk_enabled
-        _on = f"""
-            QPushButton {{ background: {C.ACT_BG}; color: {C.GREEN};
-                border: 1px solid {C.ACT_BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px; }}
-            QPushButton:hover {{ background: #13382b; }}"""
-        _off = f"""
-            QPushButton {{ background: {C.BTN_BG}; color: {C.TEXT_DIM};
-                border: 1px solid {C.BTN_BORDER}; border-radius: 3px;
-                text-align: left; padding: 0 8px; }}
-            QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER}; }}"""
-
         ptt = get_push_to_talk_enabled()
-        self._ptt_btn.setText(f" PUSH-TO-TALK: {chord_label()}" if ptt
-                              else " PUSH-TO-TALK: OFF")
-        self._ptt_btn.setIcon(icon("hand-click", active=bool(ptt)))
-        self._ptt_btn.setStyleSheet(_on if ptt else _off)
-        self._ptt_btn.setToolTip(
-            "Microphone stays closed until you hold the key — nothing is sent "
-            "while you are not holding it." if ptt
-            else "Hold a key to talk instead of streaming the mic continuously.")
+
+        for b in btns:
+            if b is getattr(self, '_ptt_btn', None):
+                # 3-icon button in Left Panel
+                b.setIcon(icon("hand-click", active=bool(ptt)))
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {C.ACT_BG if ptt else C.BTN_BG};
+                        border: 1px solid {C.ACT_BORDER if ptt else C.BTN_BORDER};
+                        border-radius: 6px;
+                    }}
+                    QPushButton:hover {{ border-color: {C.PRI}; }}
+                """)
+            else:
+                # Wide button in drawer
+                _on = f"""
+                    QPushButton {{ background: {C.ACT_BG}; color: {C.GREEN};
+                        border: 1px solid {C.ACT_BORDER}; border-radius: 3px;
+                        text-align: left; padding: 0 8px; }}
+                    QPushButton:hover {{ background: #13382b; }}"""
+                _off = f"""
+                    QPushButton {{ background: {C.BTN_BG}; color: {C.TEXT_DIM};
+                        border: 1px solid {C.BTN_BORDER}; border-radius: 3px;
+                        text-align: left; padding: 0 8px; }}
+                    QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER}; }}"""
+                b.setText(f" PUSH-TO-TALK: {chord_label()}" if ptt else " PUSH-TO-TALK: OFF")
+                b.setIcon(icon("hand-click", active=bool(ptt)))
+                b.setStyleSheet(_on if ptt else _off)
+            b.setToolTip(
+                "Microphone stays closed until you hold the key — nothing is sent "
+                "while you are not holding it." if ptt
+                else "Hold a key to talk instead of streaming the mic continuously.")
 
 
     def _refresh_hud_btn(self):
