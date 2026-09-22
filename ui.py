@@ -2289,6 +2289,7 @@ class VoiceAuthOverlay(_HudOverlay):
     """Enroll primary user's voice locally with multi-step speech prompts."""
     start_requested = pyqtSignal(str)
     _OW = 480
+    _OH = 340
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2300,31 +2301,26 @@ class VoiceAuthOverlay(_HudOverlay):
                 border-radius: 20px;
             }
         """)
-        self.setFixedWidth(self._OW)
-        self._lay = QVBoxLayout(self)
-        self._lay.setContentsMargins(22, 22, 22, 22)
-        self._lay.setSpacing(12)
-        self._show_initial()
+        self.setFixedSize(self._OW, self._OH)
+        main_lay = QVBoxLayout(self)
+        main_lay.setContentsMargins(18, 18, 18, 18)
+        main_lay.setSpacing(0)
 
-    def _clear_lay(self):
-        while self._lay.count():
-            item = self._lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.hide()
-                w.deleteLater()
-            sub = item.layout()
-            if sub is not None:
-                while sub.count():
-                    si = sub.takeAt(0)
-                    sw = si.widget()
-                    if sw is not None:
-                        sw.hide()
-                        sw.deleteLater()
-                sub.deleteLater()
+        self._stack = QStackedWidget(self)
+        self._stack.setStyleSheet("background: transparent;")
+        main_lay.addWidget(self._stack)
 
-    def _show_initial(self):
-        self._clear_lay()
+        self._build_page_init()
+        self._build_page_step()
+        self._build_page_done()
+        self._stack.setCurrentWidget(self._page_init)
+
+    def _build_page_init(self):
+        self._page_init = QWidget()
+        self._page_init.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(self._page_init)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(10)
 
         # Header
         hdr_row = QHBoxLayout(); hdr_row.setSpacing(10)
@@ -2354,13 +2350,13 @@ class VoiceAuthOverlay(_HudOverlay):
         """)
         close_btn.clicked.connect(self.hide)
         hdr_row.addWidget(close_btn)
-        self._lay.addLayout(hdr_row)
+        lay.addLayout(hdr_row)
 
         sub_lbl = QLabel("Enroll your voice so AGENT can securely recognize you. You will read 3 short phrases aloud.")
         sub_lbl.setWordWrap(True)
         sub_lbl.setFont(_app_font(8.5))
         sub_lbl.setStyleSheet("color: #8a8f8d; background: transparent;")
-        self._lay.addWidget(sub_lbl)
+        lay.addWidget(sub_lbl)
 
         # Current enrollment status
         try:
@@ -2372,8 +2368,8 @@ class VoiceAuthOverlay(_HudOverlay):
             is_enr, p_name = False, ""
 
         stat_card = QFrame()
-        stat_card.setStyleSheet("background: #1c1e1d; border: 1px solid #2a2c2b; border-radius: 10px; padding: 6px 10px;")
-        s_lay = QHBoxLayout(stat_card); s_lay.setContentsMargins(8, 6, 8, 6); s_lay.setSpacing(8)
+        stat_card.setStyleSheet("background: #1c1e1d; border: 1px solid #2a2c2b; border-radius: 10px;")
+        s_lay = QHBoxLayout(stat_card); s_lay.setContentsMargins(10, 7, 10, 7); s_lay.setSpacing(8)
         s_dot = QLabel("●")
         s_dot.setStyleSheet(f"color: {C.GREEN if is_enr else '#8a8f8d'}; font-size: 10px;")
         s_lay.addWidget(s_dot)
@@ -2382,19 +2378,19 @@ class VoiceAuthOverlay(_HudOverlay):
         s_txt.setStyleSheet("color: #f2f2f2; background: transparent;")
         s_lay.addWidget(s_txt)
         s_lay.addStretch()
-        self._lay.addWidget(stat_card)
+        lay.addWidget(stat_card)
 
         # Name field
         name_lbl = QLabel("Primary user's name")
         name_lbl.setFont(_app_font(8.5))
-        name_lbl.setStyleSheet("color: #8a8f8d; background: transparent; margin-top: 4px;")
-        self._lay.addWidget(name_lbl)
+        name_lbl.setStyleSheet("color: #8a8f8d; background: transparent; margin-top: 2px;")
+        lay.addWidget(name_lbl)
 
         default_name = str(_read_full_config().get("user_name") or p_name or "")
         self._name_inp = QLineEdit(default_name)
         self._name_inp.setPlaceholderText("e.g. Tony Stark")
-        self._name_inp.setFont(_app_font(10, bold=True))
-        self._name_inp.setFixedHeight(38)
+        self._name_inp.setFont(_app_font(9.5, bold=True))
+        self._name_inp.setFixedHeight(36)
         self._name_inp.setStyleSheet(f"""
             QLineEdit {{
                 background: #1c1e1d; color: #f2f2f2;
@@ -2404,7 +2400,9 @@ class VoiceAuthOverlay(_HudOverlay):
             QLineEdit:focus {{ border: 1px solid {C.PRI}; }}
         """)
         self._name_inp.returnPressed.connect(self._on_start_clicked)
-        self._lay.addWidget(self._name_inp)
+        lay.addWidget(self._name_inp)
+
+        lay.addStretch()
 
         # Action buttons
         btn_row = QHBoxLayout(); btn_row.setSpacing(10)
@@ -2436,19 +2434,16 @@ class VoiceAuthOverlay(_HudOverlay):
         """)
         cancel_btn.clicked.connect(self.hide)
         btn_row.addWidget(cancel_btn, stretch=1)
-        self._lay.addLayout(btn_row)
+        lay.addLayout(btn_row)
 
-        self.adjustSize()
+        self._stack.addWidget(self._page_init)
 
-    def _on_start_clicked(self):
-        name = (self._name_inp.text() or "").strip()
-        if not name:
-            self._name_inp.setFocus()
-            return
-        self.start_requested.emit(name)
-
-    def show_step(self, step: int, phrase: str):
-        self._clear_lay()
+    def _build_page_step(self):
+        self._page_step = QWidget()
+        self._page_step.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(self._page_step)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(10)
 
         # Header
         hdr_row = QHBoxLayout(); hdr_row.setSpacing(10)
@@ -2460,73 +2455,127 @@ class VoiceAuthOverlay(_HudOverlay):
         b_lay.addWidget(b_icon)
         hdr_row.addWidget(badge)
 
-        title_lbl = QLabel(f"Enrollment Step {step} of 3")
-        title_lbl.setFont(_app_font(11, bold=True))
-        title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
-        hdr_row.addWidget(title_lbl)
+        self._step_title_lbl = QLabel("Enrollment Step 1 of 3")
+        self._step_title_lbl.setFont(_app_font(11, bold=True))
+        self._step_title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        hdr_row.addWidget(self._step_title_lbl)
         hdr_row.addStretch()
-        self._lay.addLayout(hdr_row)
+        lay.addLayout(hdr_row)
 
         sub_lbl = QLabel("Read the phrase below clearly into your microphone:")
         sub_lbl.setFont(_app_font(8.5))
         sub_lbl.setStyleSheet("color: #8a8f8d; background: transparent;")
-        self._lay.addWidget(sub_lbl)
+        lay.addWidget(sub_lbl)
 
+        # Phrase Card
         card = QFrame()
         card.setStyleSheet(f"""
             QFrame {{
                 background: #1c1e1d;
                 border: 1px solid {C.ACT_BORDER};
                 border-radius: 12px;
-                padding: 14px;
+                padding: 12px;
             }}
         """)
         c_lay = QVBoxLayout(card)
-        p_lbl = QLabel(f"“{phrase}”")
-        p_lbl.setWordWrap(True)
-        p_lbl.setFont(_app_font(10.5, bold=True))
-        p_lbl.setStyleSheet("color: #f2f2f2; background: transparent;")
-        c_lay.addWidget(p_lbl)
-        self._lay.addWidget(card)
+        self._phrase_lbl = QLabel("“...”")
+        self._phrase_lbl.setWordWrap(True)
+        self._phrase_lbl.setFont(_app_font(10.5, bold=True))
+        self._phrase_lbl.setStyleSheet("color: #f2f2f2; background: transparent;")
+        self._phrase_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        c_lay.addWidget(self._phrase_lbl)
+        lay.addWidget(card)
 
-        # Status
-        rec_lbl = QLabel("●  Recording voice sample…")
-        rec_lbl.setFont(_app_font(9, bold=True))
-        rec_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
-        self._lay.addWidget(rec_lbl)
+        lay.addStretch()
 
-        self.adjustSize()
+        # Recording animation status
+        rec_row = QHBoxLayout(); rec_row.setSpacing(8)
+        rec_dot = QLabel("●")
+        rec_dot.setStyleSheet(f"color: {C.GREEN}; font-size: 13px;")
+        rec_row.addWidget(rec_dot)
+        rec_txt = QLabel("Recording voice sample — speak clearly into your mic")
+        rec_txt.setFont(_app_font(8.5, bold=True))
+        rec_txt.setStyleSheet("color: #c9cccb; background: transparent;")
+        rec_row.addWidget(rec_txt)
+        rec_row.addStretch()
+        lay.addLayout(rec_row)
 
-    def show_done(self, ok: bool, msg: str):
-        self._clear_lay()
+        self._stack.addWidget(self._page_step)
+
+    def _build_page_done(self):
+        self._page_done = QWidget()
+        self._page_done.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(self._page_done)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(12)
 
         hdr_row = QHBoxLayout(); hdr_row.setSpacing(10)
         badge = QFrame(); badge.setFixedSize(30, 30)
         badge.setStyleSheet("QFrame { background: #1c1e1d; border: 1px solid #2a2c2b; border-radius: 9px; }")
         b_lay = QHBoxLayout(badge); b_lay.setContentsMargins(0, 0, 0, 0)
-        b_icon = QLabel(); b_icon.setPixmap(icon("shield-check" if ok else "hand-stop", active=ok).pixmap(15, 15))
-        b_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        b_lay.addWidget(b_icon)
+        self._done_badge_icon = QLabel()
+        self._done_badge_icon.setPixmap(icon("shield-check", active=True).pixmap(15, 15))
+        self._done_badge_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        b_lay.addWidget(self._done_badge_icon)
         hdr_row.addWidget(badge)
 
-        title_lbl = QLabel("Enrollment Complete" if ok else "Enrollment Failed")
-        title_lbl.setFont(_app_font(11, bold=True))
-        title_lbl.setStyleSheet(f"color: {C.GREEN if ok else C.RED}; background: transparent;")
-        hdr_row.addWidget(title_lbl)
+        self._done_title_lbl = QLabel("Enrollment Complete")
+        self._done_title_lbl.setFont(_app_font(11, bold=True))
+        self._done_title_lbl.setStyleSheet(f"color: {C.GREEN}; background: transparent;")
+        hdr_row.addWidget(self._done_title_lbl)
         hdr_row.addStretch()
-        self._lay.addLayout(hdr_row)
+        lay.addLayout(hdr_row)
 
-        desc = QLabel(msg)
-        desc.setWordWrap(True)
-        desc.setFont(_app_font(9))
-        desc.setStyleSheet("color: #c9cccb; background: transparent;")
-        self._lay.addWidget(desc)
+        card = QFrame()
+        card.setStyleSheet("background: #1c1e1d; border: 1px solid #2a2c2b; border-radius: 12px; padding: 14px;")
+        c_lay = QVBoxLayout(card)
+        self._done_desc_lbl = QLabel("Voice profile has been successfully saved.")
+        self._done_desc_lbl.setWordWrap(True)
+        self._done_desc_lbl.setFont(_app_font(9.5))
+        self._done_desc_lbl.setStyleSheet("color: #f2f2f2; background: transparent;")
+        self._done_desc_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        c_lay.addWidget(self._done_desc_lbl)
+        lay.addWidget(card)
 
-        done_btn = QPushButton("Done")
-        done_btn.setFixedHeight(38)
-        done_btn.setFont(_app_font(9.5, bold=True))
-        done_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        done_btn.setStyleSheet(f"""
+        lay.addStretch()
+
+        self._done_btn = QPushButton("Done")
+        self._done_btn.setFixedHeight(38)
+        self._done_btn.setFont(_app_font(9.5, bold=True))
+        self._done_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._done_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.ACT_BG};
+                color: {C.PRI};
+                border: 1px solid {C.ACT_BORDER};
+                border-radius: 11px;
+            }}
+            QPushButton:hover {{ border-color: {C.PRI}; }}
+        """)
+        self._done_btn.clicked.connect(self.hide)
+        lay.addWidget(self._done_btn)
+
+        self._stack.addWidget(self._page_done)
+
+    def _on_start_clicked(self):
+        name = (self._name_inp.text() or "").strip()
+        if not name:
+            self._name_inp.setFocus()
+            return
+        self.start_requested.emit(name)
+
+    def show_step(self, step: int, phrase: str):
+        self._step_title_lbl.setText(f"Enrollment Step {step} of 3")
+        self._phrase_lbl.setText(f"“{phrase}”")
+        self._stack.setCurrentWidget(self._page_step)
+        self.update()
+
+    def show_done(self, ok: bool, msg: str):
+        self._done_title_lbl.setText("Enrollment Complete" if ok else "Enrollment Failed")
+        self._done_title_lbl.setStyleSheet(f"color: {C.GREEN if ok else C.RED}; background: transparent;")
+        self._done_badge_icon.setPixmap(icon("shield-check" if ok else "hand-stop", active=ok).pixmap(15, 15))
+        self._done_desc_lbl.setText(msg)
+        self._done_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {C.ACT_BG if ok else '#1c1e1d'};
                 color: {C.PRI if ok else '#c9cccb'};
@@ -2535,10 +2584,8 @@ class VoiceAuthOverlay(_HudOverlay):
             }}
             QPushButton:hover {{ border-color: {C.PRI}; }}
         """)
-        done_btn.clicked.connect(self.hide)
-        self._lay.addWidget(done_btn)
-
-        self.adjustSize()
+        self._stack.setCurrentWidget(self._page_done)
+        self.update()
 
 
 class MemoryOverlay(_HudOverlay):
@@ -5748,11 +5795,15 @@ class MainWindow(QMainWindow):
     def _centre_overlay(self, ov) -> None:
         """Place a floating overlay in the middle of the HUD and show it."""
         cw = self.centralWidget()
-        ov.adjustSize()
+        w = getattr(ov, "_OW", None) or ov.width()
+        h = getattr(ov, "_OH", None) or ov.height()
+        if not getattr(ov, "_OH", None):
+            ov.adjustSize()
+            w, h = ov.width(), ov.height()
         ov.setGeometry(
-            max(0, (cw.width()  - ov.width())  // 2),
-            max(0, (cw.height() - ov.height()) // 2),
-            ov.width(), ov.height(),
+            max(0, (cw.width()  - w) // 2),
+            max(0, (cw.height() - h) // 2),
+            w, h,
         )
         ov.show()
         ov.raise_()
