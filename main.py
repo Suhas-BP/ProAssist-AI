@@ -2310,6 +2310,8 @@ class AgentLive:
         try:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
+            self._dashboard.set_voice_auth(self._voice_auth)
+            self._dashboard.set_conversation_active_checker(lambda: self._phone_active)
             self._dashboard.set_connect_callback(self._on_phone_connected)
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session

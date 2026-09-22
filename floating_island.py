@@ -433,7 +433,13 @@ class FloatingIsland(QWidget):
 
         self._tile_cpu, self._tile_cpu_ico, self._tile_cpu_lbl = _make_tile("cpu", False, "22%")
         self._tile_mic, self._tile_mic_ico, self._tile_mic_lbl = _make_tile("microphone", True, "On")
-        self._tile_sec, self._tile_sec_ico, self._tile_sec_lbl = _make_tile("shield-check", True, "Cleared")
+        try:
+            from core.voice_auth import VoiceAuthenticator
+            _enrolled = VoiceAuthenticator().is_enrolled()
+        except Exception:
+            _enrolled = False
+        _sec_text = "Cleared" if _enrolled else "Locked"
+        self._tile_sec, self._tile_sec_ico, self._tile_sec_lbl = _make_tile("shield-check", _enrolled, _sec_text)
 
         tiles_row.addWidget(self._tile_cpu)
         tiles_row.addWidget(self._tile_mic)
@@ -486,9 +492,21 @@ class FloatingIsland(QWidget):
             # Set initial value
             self._tile_cpu_lbl.setText(self._main_window._bar_cpu._text)
 
+        # Wire voice auth enrollment signal
+        if hasattr(self._main_window, "_voice_auth_sig"):
+            self._main_window._voice_auth_sig.connect(self.on_voice_auth_updated)
+
     # ── State Updates ────────────────────────────────────────────────────────
     def on_cpu_updated(self, val: float, text: str):
         self._tile_cpu_lbl.setText(text)
+
+    def on_voice_auth_updated(self, ok: bool, message: str):
+        if ok:
+            self._tile_sec_lbl.setText("Cleared")
+            self._tile_sec_ico.setIcon(icon("shield-check", active=True))
+        else:
+            self._tile_sec_lbl.setText("Locked")
+            self._tile_sec_ico.setIcon(icon("shield-check", active=False))
 
     def on_state_changed(self, state: str):
         st = state.upper()

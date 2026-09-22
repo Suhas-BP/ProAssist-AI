@@ -1613,9 +1613,9 @@ class HueWheel(QWidget):
         ang = self._hue * 2 * math.pi
         hx  = center.x() + r * math.cos(ang)
         hy  = center.y() - r * math.sin(ang)
-        p.setPen(QPen(QColor("#00060a"), 2))
+        p.setPen(QPen(QColor("#141516"), 2))
         p.setBrush(QBrush(QColor("#ffffff")))
-        p.drawEllipse(QPointF(hx, hy), 7.5, 7.5)
+        p.drawEllipse(QPointF(hx, hy), 8.0, 8.0)
         p.end()
 
     # ── fare ─────────────────────────────────────────────────────────────────
@@ -1641,7 +1641,7 @@ class CustomizeOverlay(QWidget):
     """Floating overlay — change assistant name, user name, UI colour and voice."""
 
     saved = pyqtSignal(str, str, str, str)   # assistant_name, user_name, ui_color, voice
-    _OW, _OH = 400, 588
+    _OW, _OH = 380, 580
 
     def __init__(self, assistant_name="AGENT", user_name="",
                  ui_color=DEFAULT_UI_COLOR, voice="", parent=None):
@@ -1649,66 +1649,116 @@ class CustomizeOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             CustomizeOverlay {{
-                background: {C.PANEL};
-                border: 1px solid {C.BORDER};
-                border-radius: 6px;
+                background: #141516;
+                border: 1px solid #262a28;
+                border-radius: 20px;
             }}
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 18, 24, 18)
-        lay.setSpacing(8)
+        lay.setContentsMargins(22, 22, 22, 22)
+        lay.setSpacing(12)
 
-        def _lbl(txt, fs=9, bold=False, color=C.PRI, align=Qt.AlignmentFlag.AlignCenter):
-            w = QLabel(txt); w.setAlignment(align)
-            w.setFont(QFont("Courier New", fs,
-                            QFont.Weight.Bold if bold else QFont.Weight.Normal))
-            w.setStyleSheet(f"color: {color}; background: transparent;")
-            return w
+        # ── Header row with badge, title and close button ────────────────────
+        hdr_row = QHBoxLayout()
+        hdr_row.setSpacing(10)
 
-        _fs = (f"QLineEdit {{ background: {C.PANEL}; color: {C.TEXT}; "
-               f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
-               f"QLineEdit:focus {{ border: 1px solid {C.PRI}; }}")
+        badge = QFrame()
+        badge.setFixedSize(30, 30)
+        badge.setStyleSheet("""
+            QFrame {
+                background: #1c1e1d;
+                border: 1px solid #2a2c2b;
+                border-radius: 9px;
+            }
+        """)
+        b_lay = QHBoxLayout(badge)
+        b_lay.setContentsMargins(0, 0, 0, 0)
+        b_icon = QLabel()
+        b_icon.setPixmap(icon("settings", active=True).pixmap(14, 14))
+        b_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        b_lay.addWidget(b_icon)
+        hdr_row.addWidget(badge)
 
-        lay.addWidget(_lbl("⚙  CUSTOMISE ASSISTANT", 12, True))
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
-        lay.addWidget(sep)
+        title_lbl = QLabel("Customise Assistant")
+        title_lbl.setFont(_app_font(11, bold=True))
+        title_lbl.setStyleSheet("color: #f2f2f2; background: transparent;")
+        hdr_row.addWidget(title_lbl)
+        hdr_row.addStretch()
 
-        lay.addWidget(_lbl("ASSISTANT NAME", 8, color=C.TEXT_DIM,
-                            align=Qt.AlignmentFlag.AlignLeft))
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(26, 26)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: #1c1e1d; color: #8a8f8d;
+                border: 1px solid #2a2c2b; border-radius: 13px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                color: #f2f2f2; border-color: #262a28;
+            }
+        """)
+        close_btn.clicked.connect(self._cancel)
+        hdr_row.addWidget(close_btn)
+        lay.addLayout(hdr_row)
+
+        _inp_style = f"""
+            QLineEdit {{
+                background: #1c1e1d; color: #f2f2f2;
+                border: 1px solid #2a2c2b; border-radius: 10px;
+                padding: 0 12px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {C.PRI};
+            }}
+        """
+
+        # ── Assistant name ───────────────────────────────────────────────────
+        name_lbl = QLabel("Assistant name")
+        name_lbl.setFont(_app_font(8.5))
+        name_lbl.setStyleSheet("color: #8a8f8d; background: transparent;")
+        lay.addWidget(name_lbl)
+
         self._name_input = QLineEdit(assistant_name)
-        self._name_input.setFont(QFont("Courier New", 10))
-        self._name_input.setFixedHeight(32)
-        self._name_input.setStyleSheet(_fs)
+        self._name_input.setFont(_app_font(10, bold=True))
+        self._name_input.setFixedHeight(38)
+        self._name_input.setStyleSheet(_inp_style)
         lay.addWidget(self._name_input)
 
-        lay.addSpacing(4)
-        lay.addWidget(_lbl("YOUR NAME  (leave blank for default sir / efendim)", 8,
-                            color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
+        # ── Your name ────────────────────────────────────────────────────────
+        user_lbl = QLabel(
+            '<span style="color:#8a8f8d;">Your name </span>'
+            '<span style="color:#5c615f;font-size:9pt;">(leave blank for default sir/efendim)</span>'
+        )
+        user_lbl.setTextFormat(Qt.TextFormat.RichText)
+        user_lbl.setFont(_app_font(8.5))
+        user_lbl.setStyleSheet("background: transparent;")
+        lay.addWidget(user_lbl)
+
         self._user_input = QLineEdit(user_name)
         self._user_input.setPlaceholderText("e.g.  Tony   (leave blank for auto)")
-        self._user_input.setFont(QFont("Courier New", 10))
-        self._user_input.setFixedHeight(32)
-        self._user_input.setStyleSheet(_fs)
+        self._user_input.setFont(_app_font(10, bold=True))
+        self._user_input.setFixedHeight(38)
+        self._user_input.setStyleSheet(_inp_style)
         lay.addWidget(self._user_input)
 
         # ── Assistant voice — Gemini prebuilt voices ─────────────────────────
-        # Names are language-neutral proper nouns, so the row reads the same in
-        # every locale. Selecting one and applying rebuilds the Live session.
         from memory.config_manager import AVAILABLE_VOICES, DEFAULT_VOICE
-        lay.addSpacing(4)
-        lay.addWidget(_lbl("ASSISTANT VOICE", 8, color=C.TEXT_DIM,
-                            align=Qt.AlignmentFlag.AlignLeft))
+        voice_lbl = QLabel("Assistant voice")
+        voice_lbl.setFont(_app_font(8.5))
+        voice_lbl.setStyleSheet("color: #8a8f8d; background: transparent;")
+        lay.addWidget(voice_lbl)
+
         self._sel_voice   = (voice or DEFAULT_VOICE)
         if self._sel_voice not in AVAILABLE_VOICES:
             self._sel_voice = DEFAULT_VOICE
         self._voice_btns: dict[str, QPushButton] = {}
-        voice_row = QHBoxLayout(); voice_row.setSpacing(4)
+        voice_row = QHBoxLayout()
+        voice_row.setSpacing(6)
         for _v in AVAILABLE_VOICES:
             b = QPushButton(_v)
             b.setCheckable(True)
-            b.setFixedHeight(28)
-            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            b.setFixedHeight(30)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _=False, name=_v: self._on_voice_pick(name))
             self._voice_btns[_v] = b
@@ -1717,21 +1767,24 @@ class CustomizeOverlay(QWidget):
         self._refresh_voice_btns()
 
         # ── UI colour — colour wheel ─────────────────────────────────────────
-        lay.addSpacing(4)
         clr_hdr = QHBoxLayout()
-        clr_hdr.addWidget(_lbl("UI COLOUR  —  drag the handle", 8,
-                               color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
+        clr_lbl = QLabel("UI colour — drag the handle")
+        clr_lbl.setFont(_app_font(8.5))
+        clr_lbl.setStyleSheet("color: #8a8f8d; background: transparent;")
+        clr_hdr.addWidget(clr_lbl)
         clr_hdr.addStretch()
-        df_btn = QPushButton("DEFAULT")
-        df_btn.setFixedSize(64, 20)
-        df_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+
+        df_btn = QPushButton("Default")
+        df_btn.setFixedSize(54, 22)
+        df_btn.setFont(_app_font(7.5))
         df_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        df_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {C.BTN_BG}; color: {C.TEXT_MED};
-                border: 1px solid {C.BTN_BORDER}; border-radius: 3px;
-            }}
-            QPushButton:hover {{ color: {C.WHITE}; border-color: {C.BORDER}; }}
+        df_btn.setStyleSheet("""
+            QPushButton {
+                background: #1c1e1d; color: #8a8f8d;
+                border: 1px solid #2a2c2b; border-radius: 7px;
+                padding: 2px 8px;
+            }
+            QPushButton:hover { color: #f2f2f2; border-color: #262a28; }
         """)
         df_btn.clicked.connect(lambda: self._set_color(DEFAULT_UI_COLOR))
         clr_hdr.addWidget(df_btn)
@@ -1749,43 +1802,52 @@ class CustomizeOverlay(QWidget):
         self._wheel.hue_committed.connect(self._on_wheel_commit)
 
         self._hex_input = QLineEdit(self._sel_color)
+        self._hex_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hex_input.setFont(_app_font(9))
         self._hex_input.setPlaceholderText("#00d4ff   (custom hex colour)")
-        self._hex_input.setFont(QFont("Courier New", 10))
-        self._hex_input.setFixedHeight(28)
-        self._hex_input.setStyleSheet(_fs)
+        self._hex_input.setFixedHeight(34)
+        self._hex_input.setStyleSheet(f"""
+            QLineEdit {{
+                background: #1c1e1d; color: #c9cccb;
+                border: 1px solid #2a2c2b; border-radius: 10px;
+                padding: 6px 12px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {C.PRI}; color: #f2f2f2; }}
+        """)
         self._hex_input.textEdited.connect(self._on_hex_edited)
         lay.addWidget(self._hex_input)
 
-        lay.addSpacing(6)
-        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        # ── Action buttons (Apply / Cancel) ──────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
 
-        save_btn = QPushButton("▸  APPLY CHANGES")
-        save_btn.setFixedHeight(34)
-        save_btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        save_btn = QPushButton("✓  Apply changes")
+        save_btn.setFixedHeight(38)
+        save_btn.setFont(_app_font(9.5, bold=True))
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {C.ACT_BG}; color: {C.PRI};
-                border: 1px solid {C.ACT_BORDER}; border-radius: 3px;
+                border: 1px solid {C.ACT_BORDER}; border-radius: 11px;
             }}
             QPushButton:hover {{ background: {C.ACT_BG}; border-color: {C.PRI}; }}
         """)
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(save_btn)
+        btn_row.addWidget(save_btn, stretch=1)
 
-        cancel_btn = QPushButton("CANCEL")
-        cancel_btn.setFixedHeight(34)
-        cancel_btn.setFont(QFont("Courier New", 9))
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(38)
+        cancel_btn.setFont(_app_font(9.5))
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {C.BTN_BG}; color: {C.TEXT_MED};
-                border: 1px solid {C.BTN_BORDER}; border-radius: 3px;
-            }}
-            QPushButton:hover {{ color: {C.WHITE}; border-color: {C.BORDER}; }}
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: #1c1e1d; color: #c9cccb;
+                border: 1px solid #2a2c2b; border-radius: 11px;
+            }
+            QPushButton:hover { color: #f2f2f2; border-color: #262a28; }
         """)
         cancel_btn.clicked.connect(self._cancel)
-        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(cancel_btn, stretch=1)
         lay.addLayout(btn_row)
 
     # ── voice selection ──────────────────────────────────────────────────────
@@ -1799,15 +1861,23 @@ class CustomizeOverlay(QWidget):
             on = (name == self._sel_voice)
             b.setChecked(on)
             if on:
+                b.setFont(_app_font(9, bold=True))
                 b.setStyleSheet(f"""
-                    QPushButton {{ background: {C.ACT_BG}; color: {C.PRI};
-                        border: 1px solid {C.ACT_BORDER}; border-radius: 3px; }}
+                    QPushButton {{
+                        background: {C.ACT_BG}; color: {C.PRI};
+                        border: 1px solid {C.ACT_BORDER}; border-radius: 9px;
+                        padding: 6px 14px;
+                    }}
                 """)
             else:
-                b.setStyleSheet(f"""
-                    QPushButton {{ background: {C.BTN_BG}; color: {C.TEXT_MED};
-                        border: 1px solid {C.BTN_BORDER}; border-radius: 3px; }}
-                    QPushButton:hover {{ color: {C.WHITE}; border-color: {C.BORDER}; }}
+                b.setFont(_app_font(9, bold=False))
+                b.setStyleSheet("""
+                    QPushButton {
+                        background: #1c1e1d; color: #c9cccb;
+                        border: 1px solid #2a2c2b; border-radius: 9px;
+                        padding: 6px 14px;
+                    }
+                    QPushButton:hover { color: #f2f2f2; border-color: #262a28; }
                 """)
 
     # ── colour flow ──────────────────────────────────────────────────────────
