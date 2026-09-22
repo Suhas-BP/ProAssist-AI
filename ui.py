@@ -5406,7 +5406,6 @@ class MainWindow(QMainWindow):
             else:
                 self._wake_sleep_btn.show()
                 self._wake_sleep_btn.setText("  Sleep Now" if st["awake"] else "  Wake Now")
-                self._wake_sleep_btn.setIcon(icon("power", active=not st["awake"]))
                 self._wake_sleep_btn.setStyleSheet(_off)
 
     def _refresh_talk_btns(self):
@@ -5454,8 +5453,6 @@ class MainWindow(QMainWindow):
     def _refresh_hud_btn(self):
         from memory.config_manager import get_hud_style
         face = get_hud_style() == "face"
-        # Neither state is "off", so both read as active — this is a choice
-        # between two things, not a switch with a disabled side.
         style = """
             QPushButton { background: #1c1e1d; color: #c9cccb;
                 border: 1px solid #2a2c2b; border-radius: 8px;
@@ -5463,7 +5460,7 @@ class MainWindow(QMainWindow):
             QPushButton:hover { color: #f2f2f2; border-color: #262a28; }"""
         self._hud_btn.setText("  HUD: Animated Face" if face
                               else "  HUD: Reactor Core")
-        self._hud_btn.setIcon(icon("sparkles" if face else "cpu"))
+        self._hud_btn.setIcon(icon("cpu", active=not face))
         self._hud_btn.setStyleSheet(style)
         self._hud_btn.setToolTip(
             "An animated head that speaks your words and shows what AGENT is "
@@ -5639,7 +5636,6 @@ class MainWindow(QMainWindow):
             return
         if enabled:
             self._brief_btn.setText("  Morning Brief: On")
-            self._brief_btn.setIcon(icon("sun", active=True))
             self._brief_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: {C.ACT_BG}; color: {C.GREEN};
@@ -5650,7 +5646,6 @@ class MainWindow(QMainWindow):
             """)
         else:
             self._brief_btn.setText("  Morning Brief: Off")
-            self._brief_btn.setIcon(icon("sun", active=False))
             self._brief_btn.setStyleSheet("""
                 QPushButton {
                     background: #1c1e1d; color: #8a8f8d;
