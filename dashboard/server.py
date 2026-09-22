@@ -16,6 +16,7 @@ import re
 import secrets
 import socket
 import string
+import threading
 import time
 from pathlib import Path
 
@@ -472,6 +473,18 @@ class DashboardServer:
         self._uploads_dir                 = UPLOADS_DIR
         self._login_html                  = _read("login.html")
         self._app_html                    = _read("app.html")
+        self._voice_auth                  = None
+        self._conversation_active_checker = None
+        self._last_phone_audio_time       = 0.0
+        self._web_enroll_active           = False
+        self._web_enroll_lock             = threading.Lock()
+        self._web_enroll_buffer           = bytearray()
+        self._web_enroll_recordings: list = []
+        self._web_enroll_name             = ""
+        self._web_enroll_step             = 0
+        self._web_enroll_task             = None
+        self._web_enroll_ws               = None
+        self._live_audio_clients: set     = set()
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
@@ -522,6 +535,108 @@ class DashboardServer:
     def set_connect_callback(self, fn) -> None:
         self._connect_callback = fn
 
+    def set_voice_auth(self, va) -> None:
+        self._voice_auth = va
+
+    def set_conversation_active_checker(self, fn) -> None:
+        self._conversation_active_checker = fn
+
+    def _get_voice_auth(self):
+        if self._voice_auth is not None:
+            return self._voice_auth
+        try:
+            from core.voice_auth import VoiceAuthenticator
+            self._voice_auth = VoiceAuthenticator()
+            return self._voice_auth
+        except Exception:
+            return None
+
+    def is_phone_audio_in_use(self) -> bool:
+        if bool(self._live_audio_clients):
+            return True
+        if self._conversation_active_checker:
+            try:
+                if self._conversation_active_checker():
+                    return True
+            except Exception:
+                pass
+        return (time.time() - self._last_phone_audio_time) < 2.0
+
+    async def _run_web_enrollment_auto(self, name: str):
+        import numpy as np
+        from core.voice_auth import REGISTRATION_SENTENCES
+        try:
+            recordings = []
+            for step, phrase in enumerate(REGISTRATION_SENTENCES, start=1):
+                self._web_enroll_step = step
+                # Step announcement: reading status (give 2 seconds to read)
+                await self.broadcast({
+                    "type": "voice_enroll_step",
+                    "step": step,
+                    "phrase": phrase,
+                    "status": "reading",
+                })
+                with self._web_enroll_lock:
+                    self._web_enroll_buffer.clear()
+                await asyncio.sleep(2.0)
+
+                # Capture status: recording for ~6 seconds
+                with self._web_enroll_lock:
+                    self._web_enroll_buffer.clear()
+                await self.broadcast({
+                    "type": "voice_enroll_step",
+                    "step": step,
+                    "phrase": phrase,
+                    "status": "recording",
+                })
+                await asyncio.sleep(6.0)
+
+                with self._web_enroll_lock:
+                    raw = bytes(self._web_enroll_buffer)
+                    self._web_enroll_buffer.clear()
+                samples = np.frombuffer(raw, dtype=np.int16)
+                recordings.append(samples)
+
+            # All 3 captured: call VoiceAuthenticator.enroll
+            va = self._get_voice_auth()
+            if not va:
+                raise RuntimeError("VoiceAuthenticator is not initialized")
+            ok, msg = await asyncio.get_event_loop().run_in_executor(
+                None, va.enroll, name, recordings, list(REGISTRATION_SENTENCES)
+            )
+            await self.broadcast({
+                "type": "voice_enroll_done",
+                "ok": ok,
+                "message": msg,
+            })
+        except asyncio.CancelledError:
+            await self.broadcast({
+                "type": "voice_enroll_done",
+                "ok": False,
+                "message": "Enrollment was cancelled.",
+            })
+        except Exception as e:
+            await self.broadcast({
+                "type": "voice_enroll_done",
+                "ok": False,
+                "message": f"Enrollment failed: {e}",
+            })
+        finally:
+            with self._web_enroll_lock:
+                self._web_enroll_active = False
+                self._web_enroll_buffer.clear()
+                self._web_enroll_recordings.clear()
+                self._web_enroll_step = 0
+                self._web_enroll_task = None
+
+    async def _safe_send_json(self, ws: WebSocket, data: dict) -> None:
+        lock = getattr(ws, "_send_lock", None)
+        if lock is not None:
+            async with lock:
+                await ws.send_json(data)
+        else:
+            await ws.send_json(data)
+
     # ── broadcast ────────────────────────────────────────────────────────
 
     async def broadcast(self, msg: dict) -> None:
@@ -531,7 +646,7 @@ class DashboardServer:
         dead: set[WebSocket] = set()
         for ws in list(self._clients):
             try:
-                await ws.send_json(msg)
+                await self._safe_send_json(ws, msg)
             except Exception:
                 dead.add(ws)
         self._clients -= dead
@@ -703,27 +818,69 @@ class DashboardServer:
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 
         @app.websocket("/ws/phone-audio")
-        async def phone_audio_ws(websocket: WebSocket, token: str = ""):
+        async def phone_audio_ws(websocket: WebSocket, token: str = "", purpose: str = ""):
             tok = token.strip()
             if not tok or tok not in self._tokens:
-                await websocket.close(code=4001)
+                await websocket.close(code=4001, reason="Unauthorized")
                 return
+
+            is_enroll = (purpose == "enrollment")
+
+            # Mutual exclusion check:
+            if self._web_enroll_active:
+                if not is_enroll:
+                    await websocket.accept()
+                    await websocket.close(
+                        code=1008,
+                        reason="Voice enrollment in progress. Live conversation unavailable.",
+                    )
+                    return
+                if self._web_enroll_ws is not None and self._web_enroll_ws is not websocket:
+                    await websocket.accept()
+                    await websocket.close(
+                        code=1008,
+                        reason="An enrollment audio stream is already active.",
+                    )
+                    return
+            else:
+                if is_enroll and self.is_phone_audio_in_use():
+                    await websocket.accept()
+                    await websocket.close(
+                        code=1008,
+                        reason="Live conversation in progress. Cannot start enrollment.",
+                    )
+                    return
+
             await websocket.accept()
+            if is_enroll:
+                self._web_enroll_ws = websocket
+            else:
+                self._live_audio_clients.add(websocket)
+                self._last_phone_audio_time = time.time()
+
             asyncio.create_task(self.broadcast(
                 {"type": "sys", "text": "Phone microphone live."}
             ))
             try:
                 while True:
                     data = await websocket.receive_bytes()
-                    try:
-                        self._phone_audio_queue.put_nowait(
-                            {"data": data, "mime_type": "audio/pcm"}
-                        )
-                    except asyncio.QueueFull:
-                        pass  # drop frame rather than block
+                    if is_enroll or self._web_enroll_active:
+                        with self._web_enroll_lock:
+                            self._web_enroll_buffer.extend(data)
+                    else:
+                        self._last_phone_audio_time = time.time()
+                        try:
+                            self._phone_audio_queue.put_nowait(
+                                {"data": data, "mime_type": "audio/pcm"}
+                            )
+                        except asyncio.QueueFull:
+                            pass  # drop frame rather than block
             except WebSocketDisconnect:
                 pass
             finally:
+                if is_enroll and self._web_enroll_ws is websocket:
+                    self._web_enroll_ws = None
+                self._live_audio_clients.discard(websocket)
                 asyncio.create_task(self.broadcast(
                     {"type": "sys", "text": "Phone microphone stopped."}
                 ))
@@ -804,6 +961,160 @@ class DashboardServer:
                 pass
             return JSONResponse({"files": files})
 
+        @app.get("/api/memory")
+        async def get_memory(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                from memory.memory_manager import all_entries_for_ui
+                entries = all_entries_for_ui()
+            except Exception:
+                entries = []
+            return JSONResponse({"ok": True, "entries": entries})
+
+        @app.get("/api/voice-auth/status")
+        async def voice_auth_status(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            va = self._get_voice_auth()
+            enrolled = va.is_enrolled() if va else False
+            profile = va.profile() if va else {}
+            return JSONResponse({
+                "ok": True,
+                "enrolled": enrolled,
+                "name": profile.get("name", ""),
+                "enrollment_active": self._web_enroll_active,
+                "phone_in_use": self.is_phone_audio_in_use(),
+            })
+
+        @app.post("/api/voice-auth/enroll/start")
+        async def enroll_start(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if self._web_enroll_active:
+                return JSONResponse(
+                    {"error": "An enrollment session is already in progress."},
+                    status_code=409,
+                )
+            if self.is_phone_audio_in_use():
+                return JSONResponse(
+                    {"error": "Phone microphone is currently in use for an active conversation."},
+                    status_code=409,
+                )
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            name = (body.get("name") or "").strip()
+            if not name:
+                return JSONResponse({"error": "Name is required for voice enrollment."}, status_code=400)
+
+            from core.voice_auth import REGISTRATION_SENTENCES
+
+            with self._web_enroll_lock:
+                self._web_enroll_active = True
+                self._web_enroll_name = name
+                self._web_enroll_step = 1
+                self._web_enroll_buffer.clear()
+                self._web_enroll_recordings.clear()
+
+            auto = body.get("auto", True)
+            if auto:
+                self._web_enroll_task = asyncio.create_task(self._run_web_enrollment_auto(name))
+            else:
+                await self.broadcast({
+                    "type": "voice_enroll_step",
+                    "step": 1,
+                    "phrase": REGISTRATION_SENTENCES[0],
+                    "status": "ready",
+                })
+
+            return JSONResponse({
+                "ok": True,
+                "step": 1,
+                "phrase": REGISTRATION_SENTENCES[0],
+                "total": len(REGISTRATION_SENTENCES),
+            })
+
+        @app.post("/api/voice-auth/enroll/next")
+        async def enroll_next(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if not self._web_enroll_active:
+                return JSONResponse({"error": "No enrollment session active."}, status_code=400)
+
+            import numpy as np
+            from core.voice_auth import REGISTRATION_SENTENCES
+
+            with self._web_enroll_lock:
+                raw = bytes(self._web_enroll_buffer)
+                self._web_enroll_buffer.clear()
+            samples = np.frombuffer(raw, dtype=np.int16)
+            self._web_enroll_recordings.append(samples)
+            self._web_enroll_step += 1
+
+            if self._web_enroll_step <= len(REGISTRATION_SENTENCES):
+                next_phrase = REGISTRATION_SENTENCES[self._web_enroll_step - 1]
+                await self.broadcast({
+                    "type": "voice_enroll_step",
+                    "step": self._web_enroll_step,
+                    "phrase": next_phrase,
+                    "status": "recording",
+                })
+                return JSONResponse({
+                    "ok": True,
+                    "step": self._web_enroll_step,
+                    "phrase": next_phrase,
+                    "done": False,
+                })
+            else:
+                # All phrases recorded
+                recs_to_enroll = list(self._web_enroll_recordings)
+                try:
+                    va = self._get_voice_auth()
+                    if not va:
+                        raise RuntimeError("VoiceAuthenticator is not initialized")
+                    ok, msg = await asyncio.get_event_loop().run_in_executor(
+                        None, va.enroll, self._web_enroll_name, recs_to_enroll, list(REGISTRATION_SENTENCES)
+                    )
+                    await self.broadcast({
+                        "type": "voice_enroll_done",
+                        "ok": ok,
+                        "message": msg,
+                    })
+                    return JSONResponse({"ok": ok, "done": True, "message": msg})
+                except Exception as e:
+                    await self.broadcast({
+                        "type": "voice_enroll_done",
+                        "ok": False,
+                        "message": str(e),
+                    })
+                    return JSONResponse({"ok": False, "done": True, "message": str(e)})
+                finally:
+                    with self._web_enroll_lock:
+                        self._web_enroll_active = False
+                        self._web_enroll_buffer.clear()
+                        self._web_enroll_recordings = []
+                        self._web_enroll_step = 0
+
+        @app.post("/api/voice-auth/enroll/cancel")
+        async def enroll_cancel(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if self._web_enroll_task and not self._web_enroll_task.done():
+                self._web_enroll_task.cancel()
+            with self._web_enroll_lock:
+                self._web_enroll_active = False
+                self._web_enroll_buffer.clear()
+                self._web_enroll_recordings.clear()
+                self._web_enroll_step = 0
+            await self.broadcast({
+                "type": "voice_enroll_done",
+                "ok": False,
+                "message": "Enrollment cancelled.",
+            })
+            return JSONResponse({"ok": True})
+
         @app.get("/uploads/{filename}")
         async def download_file(filename: str, token: str = ""):
             # Auth via query param — browser <a download> can't send custom headers
@@ -823,12 +1134,37 @@ class DashboardServer:
                 await websocket.close(code=4001)
                 return
             await websocket.accept()
+            websocket._send_lock = asyncio.Lock()
             self._clients.add(websocket)
             for entry in self._history[-50:]:
                 try:
-                    await websocket.send_json(entry)
+                    await self._safe_send_json(websocket, entry)
                 except Exception:
                     break
+
+            async def _send_metrics():
+                try:
+                    from ui import _metrics
+                except ImportError:
+                    return
+                try:
+                    while True:
+                        snap = _metrics.snapshot()
+                        net = snap.get("net", 0.0)
+                        net_str = f"{net*1024:.0f} KB/s" if net < 1.0 else f"{net:.1f} MB/s"
+                        await self._safe_send_json(websocket, {
+                            "type": "metrics",
+                            "cpu": snap.get("cpu", 0.0),
+                            "mem": snap.get("mem", 0.0),
+                            "net": net_str,
+                        })
+                        await asyncio.sleep(1)
+                except (asyncio.CancelledError, WebSocketDisconnect):
+                    pass
+                except Exception:
+                    pass
+
+            metrics_task = asyncio.create_task(_send_metrics())
             try:
                 while True:
                     data = await websocket.receive_json()
@@ -842,6 +1178,7 @@ class DashboardServer:
             except WebSocketDisconnect:
                 pass
             finally:
+                metrics_task.cancel()
                 self._clients.discard(websocket)
 
         return app
