@@ -23,17 +23,20 @@ Features:
 
 import sys
 import math
+import html
+import webbrowser
 from pathlib import Path
 from PyQt6.QtCore import (
     Qt, QRect, QRectF, QPoint, QPointF, QTimer, QPropertyAnimation,
-    QEasingCurve, pyqtSignal
+    QEasingCurve, pyqtSignal, QUrl, QSize
 )
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QFont, QPainterPath
+    QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QFontMetrics,
+    QDesktopServices
 )
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
-    QStackedLayout, QFrame, QApplication
+    QStackedLayout, QFrame, QApplication, QScrollArea, QStackedWidget
 )
 
 try:
@@ -58,13 +61,113 @@ C_TILE_BORDER  = "#262a28"
 C_DANGER       = "#ff4444"
 
 
-
-def _island_font(size: float = 9, bold: bool = False) -> QFont:
+def _island_font(size: float = 9, bold: bool = False, weight: QFont.Weight = None) -> QFont:
     f = QFont("Segoe UI", int(size))
     f.setStyleHint(QFont.StyleHint.SansSerif)
-    if bold:
+    if weight is not None:
+        f.setWeight(weight)
+    elif bold:
         f.setWeight(QFont.Weight.Bold)
     return f
+
+
+def _open_source_link(url: str):
+    """Safely open source link in default browser."""
+    if not url:
+        return
+    qurl = QUrl(url if "://" in url else f"https://{url}")
+    if not QDesktopServices.openUrl(qurl):
+        webbrowser.open(str(qurl.toString()))
+
+
+def _clamp_to_2_lines(text: str, font: QFont, max_width: int) -> str:
+    """True 2-line clamping with QFontMetrics elision."""
+    fm = QFontMetrics(font)
+    words = text.split()
+    if not words:
+        return ""
+
+    line1 = ""
+    idx = 0
+    # Line 1: fit words up to max_width
+    while idx < len(words):
+        test_line = (line1 + " " + words[idx]).strip()
+        if fm.horizontalAdvance(test_line) <= max_width:
+            line1 = test_line
+            idx += 1
+        else:
+            break
+
+    # If all words fit on line 1, return single line
+    if idx >= len(words):
+        return line1
+
+    # Line 2: remainder of words elided with ellipsis
+    rem = " ".join(words[idx:])
+    line2 = fm.elidedText(rem, Qt.TextElideMode.ElideRight, max_width)
+    return f"{line1}\n{line2}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dynamic Stacked Widget (respects current page size only)
+# ─────────────────────────────────────────────────────────────────────────────
+class DynamicStackedWidget(QStackedWidget):
+    """QStackedWidget that reports sizeHint and minimumSizeHint of the currently active page only."""
+
+    def minimumSizeHint(self):
+        cw = self.currentWidget()
+        return cw.minimumSizeHint() if cw else super().minimumSizeHint()
+
+    def sizeHint(self):
+        cw = self.currentWidget()
+        return cw.sizeHint() if cw else super().sizeHint()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sparkline Widget for Single-Value Card
+# ─────────────────────────────────────────────────────────────────────────────
+class Sparkline(QWidget):
+    """
+    Mini sparkline graph in accent green (#2ee672) for single-value info card.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self._points = []
+
+    def set_points(self, points: list[float] | None):
+        self._points = points or []
+        self.update()
+
+    def paintEvent(self, _):
+        if not self._points or len(self._points) < 2:
+            return
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = float(self.width())
+        h = float(self.height())
+        min_v = min(self._points)
+        max_v = max(self._points)
+        rng = max(max_v - min_v, 1e-4)
+
+        pen = QPen(QColor(C_PRI), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+
+        path = QPainterPath()
+        n = len(self._points)
+        for i, pt in enumerate(self._points):
+            x = 4.0 + (w - 8.0) * (i / (n - 1))
+            y = (h - 6.0) - ((pt - min_v) / rng) * (h - 12.0)
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        p.drawPath(path)
+        p.end()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,14 +317,21 @@ class FloatingIsland(QWidget):
     COLLAPSED_W = 280
     COLLAPSED_H = 46
 
-    EXPANDED_W = 300
-    EXPANDED_H = 316
+    EXPANDED_W = 320
+    EXPANDED_H = 340
+
+    EXPANDED_LIST_W = 460
+    EXPANDED_LIST_H = 450
 
     def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
         self._main_window = main_window
         self._is_expanded = False
         self._drag_pos = None
+
+        self._target_expanded_w = self.EXPANDED_W
+        self._target_expanded_h = self.EXPANDED_H
+        self._info_payload = None
 
         # Frameless, translucent, always-on-top
         self.setWindowFlags(
@@ -407,8 +517,12 @@ class FloatingIsland(QWidget):
         hdr_row.addWidget(self._chevron_up_btn)
         card_lay.addLayout(hdr_row)
 
-        # Center Status Area (Circle + Status Line)
-        center_col = QVBoxLayout()
+        # Center Stack (Status circle default OR info-card content)
+        self._content_stack = DynamicStackedWidget(self._card_widget)
+
+        # Page 0: Default Center Status Area (Circle + Status Line)
+        self._status_container = QWidget()
+        center_col = QVBoxLayout(self._status_container)
         center_col.setContentsMargins(0, 4, 0, 4)
         center_col.setSpacing(8)
         center_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -420,8 +534,137 @@ class FloatingIsland(QWidget):
         self._card_status_line.setFont(_island_font(8.5))
         self._card_status_line.setStyleSheet("color: #8a8f8d; background: transparent;")
         self._card_status_line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._card_status_line.setWordWrap(True)
         center_col.addWidget(self._card_status_line)
-        card_lay.addLayout(center_col)
+        self._content_stack.addWidget(self._status_container)
+
+        # Page 1: Single-Value Info Container
+        self._info_value_container = QWidget()
+        v_lay = QVBoxLayout(self._info_value_container)
+        v_lay.setContentsMargins(2, 2, 2, 2)
+        v_lay.setSpacing(6)
+
+        v_sub = QLabel("Showing what you asked for")
+        v_sub.setFont(_island_font(8))
+        v_sub.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; border: none;")
+        v_lay.addWidget(v_sub)
+
+        v_hdr = QHBoxLayout()
+        v_hdr.setContentsMargins(0, 0, 0, 0)
+        v_hdr.setSpacing(6)
+        self._val_icon_btn = QPushButton()
+        self._val_icon_btn.setFixedSize(18, 18)
+        self._val_icon_btn.setIcon(icon("broadcast", active=True))
+        self._val_icon_btn.setStyleSheet("background: transparent; border: none;")
+        v_hdr.addWidget(self._val_icon_btn)
+
+        self._val_source_lbl = QLabel("Market • Updated")
+        self._val_source_lbl.setFont(_island_font(8))
+        self._val_source_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; border: none;")
+        v_hdr.addWidget(self._val_source_lbl)
+
+        self._val_name_lbl = QLabel("")
+        self._val_name_lbl.setFont(_island_font(8.5, bold=True))
+        self._val_name_lbl.setStyleSheet(f"color: {C_WHITE}; background: transparent; border: none;")
+        v_hdr.addWidget(self._val_name_lbl)
+        v_hdr.addStretch(1)
+        v_lay.addLayout(v_hdr)
+
+        val_row = QHBoxLayout()
+        val_row.setContentsMargins(0, 0, 0, 0)
+        val_row.setSpacing(8)
+        self._val_value_lbl = QLabel("—")
+        self._val_value_lbl.setFont(_island_font(18, bold=True))
+        self._val_value_lbl.setStyleSheet(f"color: {C_WHITE}; background: transparent; border: none;")
+        val_row.addWidget(self._val_value_lbl)
+
+        self._val_delta_lbl = QLabel("+0.0%")
+        self._val_delta_lbl.setFont(_island_font(8, bold=True))
+        self._val_delta_lbl.setStyleSheet(f"""
+            color: {C_PRI};
+            background: #1c1e1d;
+            border: 1px solid {C_TILE_BORDER};
+            border-radius: 8px;
+            padding: 2px 6px;
+        """)
+        val_row.addWidget(self._val_delta_lbl)
+        val_row.addStretch(1)
+        v_lay.addLayout(val_row)
+
+        self._val_sparkline = Sparkline()
+        v_lay.addWidget(self._val_sparkline)
+        self._content_stack.addWidget(self._info_value_container)
+
+        # Page 2: Multi-Item List Info Container
+        self._info_list_container = QWidget()
+        l_lay = QVBoxLayout(self._info_list_container)
+        l_lay.setContentsMargins(2, 2, 2, 2)
+        l_lay.setSpacing(6)
+
+        l_sub = QLabel("Showing what you asked for")
+        l_sub.setFont(_island_font(8))
+        l_sub.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; border: none;")
+        l_lay.addWidget(l_sub)
+
+        l_hdr = QHBoxLayout()
+        l_hdr.setContentsMargins(0, 0, 0, 0)
+        l_hdr.setSpacing(6)
+        self._list_icon_btn = QPushButton()
+        self._list_icon_btn.setFixedSize(18, 18)
+        self._list_icon_btn.setIcon(icon("layout-grid-add", active=True))
+        self._list_icon_btn.setStyleSheet("background: transparent; border: none;")
+        l_hdr.addWidget(self._list_icon_btn)
+
+        self._list_source_lbl = QLabel("Search • Just now")
+        self._list_source_lbl.setFont(_island_font(8))
+        self._list_source_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; border: none;")
+        l_hdr.addWidget(self._list_source_lbl)
+        l_hdr.addStretch(1)
+        l_lay.addLayout(l_hdr)
+
+        # Scroll Area for List Items
+        self._list_scroll = QScrollArea()
+        self._list_scroll.setWidgetResizable(True)
+        self._list_scroll.setMinimumHeight(60)
+        self._list_scroll.setMaximumHeight(220)
+        self._list_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._list_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 5px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C_TILE_BORDER};
+                min-height: 20px;
+                border-radius: 2px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {C_PRI_DIM};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+                border: none;
+            }}
+        """)
+
+        self._list_items_container = QWidget()
+        self._list_items_container.setStyleSheet("background: transparent;")
+        self._list_items_lay = QVBoxLayout(self._list_items_container)
+        self._list_items_lay.setContentsMargins(0, 0, 6, 0)
+        self._list_items_lay.setSpacing(6)
+        self._list_scroll.setWidget(self._list_items_container)
+        l_lay.addWidget(self._list_scroll)
+
+        self._content_stack.addWidget(self._info_list_container)
+        card_lay.addWidget(self._content_stack)
 
         # 3 Quick-Stat Tiles (CPU / Mic / Security)
         tiles_row = QHBoxLayout()
@@ -456,6 +699,15 @@ class FloatingIsland(QWidget):
                 btn_ico.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn_ico.clicked.connect(on_click)
                 tile.setCursor(Qt.CursorShape.PointingHandCursor)
+                vlbl.setCursor(Qt.CursorShape.PointingHandCursor)
+
+                def _handle_press(e):
+                    if e.button() == Qt.MouseButton.LeftButton:
+                        on_click()
+                        e.accept()
+
+                tile.mousePressEvent = _handle_press
+                vlbl.mousePressEvent = _handle_press
 
             return tile, btn_ico, vlbl
 
@@ -480,6 +732,7 @@ class FloatingIsland(QWidget):
         self._open_dash_btn.setFixedHeight(36)
         self._open_dash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._open_dash_btn.setIcon(icon("maximize"))
+        self._open_dash_btn.setIconSize(QSize(16, 16))
         self._open_dash_btn.setStyleSheet("""
             QPushButton {
                 background: #1c1e1d;
@@ -524,11 +777,68 @@ class FloatingIsland(QWidget):
         if hasattr(self._main_window, "_voice_auth_sig"):
             self._main_window._voice_auth_sig.connect(self.on_voice_auth_updated)
 
+        # Wire mute signal
+        if hasattr(self._main_window, "_mute_sig"):
+            self._main_window._mute_sig.connect(self.set_mic_muted)
+
+        # Initial mute sync
+        if hasattr(self._main_window, "_muted"):
+            self.set_mic_muted(bool(self._main_window._muted))
+
     # ── Actions & Helpers ────────────────────────────────────────────────────
     def _toggle_mic(self):
         """Toggle microphone mute/unmute state."""
         if self._main_window and hasattr(self._main_window, "_toggle_mute"):
             self._main_window._toggle_mute()
+            if hasattr(self._main_window, "_muted"):
+                self.set_mic_muted(self._main_window._muted)
+
+    def set_mic_muted(self, muted: bool):
+        """Update floating island microphone tile and pill button state with Off/On and color change."""
+        self._mic_muted = muted
+        if muted:
+            self._pill_mic_btn.setIcon(icon("microphone", active=False))
+            self._pill_mic_btn.setStyleSheet("""
+                QPushButton {
+                    background: #2b1818;
+                    border: 1px solid #ff4444;
+                    border-radius: 14px;
+                    padding: 0;
+                }
+                QPushButton:hover {
+                    background: #3b2020;
+                }
+            """)
+            self._tile_mic_lbl.setText("Off")
+            self._tile_mic_lbl.setStyleSheet(f"color: {C_DANGER}; background: transparent;")
+            self._tile_mic_ico.setIcon(icon("microphone", active=False))
+            self._tile_mic.setStyleSheet("""
+                background: #2a1414;
+                border: 1px solid #5a2323;
+                border-radius: 10px;
+            """)
+        else:
+            self._pill_mic_btn.setIcon(icon("microphone", active=True))
+            self._pill_mic_btn.setStyleSheet("""
+                QPushButton {
+                    background: #1c1e1d;
+                    border: 1px solid #2a2c2b;
+                    border-radius: 14px;
+                    padding: 0;
+                }
+                QPushButton:hover {
+                    background: #242725;
+                    border-color: #4fe28c;
+                }
+            """)
+            self._tile_mic_lbl.setText("On")
+            self._tile_mic_lbl.setStyleSheet(f"color: {C_WHITE}; background: transparent;")
+            self._tile_mic_ico.setIcon(icon("microphone", active=True))
+            self._tile_mic.setStyleSheet(f"""
+                background: {C_TILE_BG};
+                border: 1px solid {C_TILE_BORDER};
+                border-radius: 10px;
+            """)
 
     # ── State Updates ────────────────────────────────────────────────────────
     def on_cpu_updated(self, val: float, text: str):
@@ -568,55 +878,237 @@ class FloatingIsland(QWidget):
         self._pill_dot.setStyleSheet(f"color: {dot_col}; background: transparent;")
         self._card_dot.setStyleSheet(f"color: {dot_col}; background: transparent;")
 
-        # Pill mic button
-        if not mic_on:
-            self._pill_mic_btn.setIcon(icon("microphone", active=False))
-            self._pill_mic_btn.setStyleSheet("""
-                QPushButton {
-                    background: #2b1818;
-                    border: 1px solid #ff4444;
-                    border-radius: 14px;
-                    padding: 0;
-                }
-                QPushButton:hover {
-                    background: #3b2020;
-                }
-            """)
-            self._tile_mic_lbl.setText("Muted")
-            self._tile_mic_ico.setIcon(icon("microphone", active=False))
+        # Update mic tile & button based on state
+        if self._main_window and hasattr(self._main_window, "_muted") and self._main_window._muted:
+            self.set_mic_muted(True)
+        elif st == "MUTED":
+            self.set_mic_muted(True)
+        elif st in ("LISTENING", "SPEAKING"):
+            self.set_mic_muted(False)
+
+    # ── Info Card & Multi-Item List ──────────────────────────────────────────
+    def set_info(self, payload: dict | None = None):
+        """
+        Extend the info-card with discriminated type:
+        payload = {
+            "type": "value" | "list",
+            "sourceLabel": str,
+            "updatedLabel": str,
+            "icon": str,
+            # when type == "value":
+            "itemName": str,
+            "value": str,
+            "delta": str,
+            "trend": list[float] | None,
+            # when type == "list":
+            "items": [
+                {"title": str, "snippet": str, "sourceLink": str}
+            ]
+        }
+        """
+        self._info_payload = payload
+        if not payload:
+            self._content_stack.setCurrentWidget(self._status_container)
+            self._target_expanded_w = self.EXPANDED_W
+            self._target_expanded_h = self.EXPANDED_H
+            if self._is_expanded:
+                self._animate_resize(self.EXPANDED_W, self.EXPANDED_H)
+            return
+
+        start_geom = self.geometry()
+        ptype = payload.get("type", "value")
+        if ptype == "list":
+            self._render_list_block(payload)
+            self._content_stack.setCurrentWidget(self._info_list_container)
+            self._target_expanded_w = self.EXPANDED_LIST_W
+            self._target_expanded_h = self.EXPANDED_LIST_H
+            if self._is_expanded:
+                self._animate_resize(self.EXPANDED_LIST_W, self.EXPANDED_LIST_H, start_geom=start_geom)
         else:
-            self._pill_mic_btn.setIcon(icon("microphone", active=True))
-            self._pill_mic_btn.setStyleSheet("""
-                QPushButton {
-                    background: #1c1e1d;
-                    border: 1px solid #2a2c2b;
-                    border-radius: 14px;
-                    padding: 0;
-                }
-                QPushButton:hover {
-                    background: #242725;
-                    border-color: #4fe28c;
-                }
+            self._render_value_block(payload)
+            self._content_stack.setCurrentWidget(self._info_value_container)
+            self._target_expanded_w = self.EXPANDED_W
+            self._target_expanded_h = self.EXPANDED_H
+            if self._is_expanded:
+                self._animate_resize(self.EXPANDED_W, self.EXPANDED_H, start_geom=start_geom)
+
+    def _render_value_block(self, payload: dict):
+        source_txt = payload.get("sourceLabel", "Market")
+        updated_txt = payload.get("updatedLabel", "")
+        item_name = payload.get("itemName", "")
+        self._val_source_lbl.setText(f"{source_txt} • {updated_txt}" if updated_txt else source_txt)
+        self._val_name_lbl.setText(item_name)
+
+        icon_name = payload.get("icon", "broadcast")
+        try:
+            self._val_icon_btn.setIcon(icon(icon_name, active=True))
+        except Exception:
+            pass
+
+        val_str = str(payload.get("value", "—"))
+        self._val_value_lbl.setText(val_str)
+
+        delta_str = str(payload.get("delta", "+0.0%"))
+        self._val_delta_lbl.setText(delta_str)
+        if delta_str.startswith("-"):
+            self._val_delta_lbl.setStyleSheet(f"""
+                color: {C_DANGER};
+                background: #2a1414;
+                border: 1px solid #5a2323;
+                border-radius: 8px;
+                padding: 2px 6px;
             """)
-            self._tile_mic_lbl.setText("On")
-            self._tile_mic_ico.setIcon(icon("microphone", active=True))
+        else:
+            self._val_delta_lbl.setStyleSheet(f"""
+                color: {C_PRI};
+                background: #1c1e1d;
+                border: 1px solid {C_TILE_BORDER};
+                border-radius: 8px;
+                padding: 2px 6px;
+            """)
+
+        trend = payload.get("trend")
+        self._val_sparkline.set_points(trend)
+
+    def _render_list_block(self, payload: dict):
+        source_txt = payload.get("sourceLabel", "Search")
+        updated_txt = payload.get("updatedLabel", "Just now")
+        self._list_source_lbl.setText(f"{source_txt} • {updated_txt}" if updated_txt else source_txt)
+
+        icon_name = payload.get("icon", "layout-grid-add")
+        try:
+            self._list_icon_btn.setIcon(icon(icon_name, active=True))
+        except Exception:
+            pass
+
+        # Clear existing items
+        while self._list_items_lay.count():
+            item = self._list_items_lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        items = payload.get("items", [])
+        vp_w = self._list_scroll.viewport().width()
+        available_text_w = vp_w - 6 if vp_w > 50 else (self.EXPANDED_LIST_W - 28 - 11)
+
+        for idx, it in enumerate(items):
+            item_frame = QFrame()
+            top_border = f"border-top: 1px solid {C_TILE_BORDER};" if idx > 0 else "border-top: none;"
+            item_frame.setStyleSheet(f"""
+                QFrame {{
+                    background: transparent;
+                    {top_border}
+                    padding-top: {6 if idx > 0 else 0}px;
+                    padding-bottom: 6px;
+                }}
+            """)
+            ilay = QVBoxLayout(item_frame)
+            ilay.setContentsMargins(0, 0, 0, 0)
+            ilay.setSpacing(3)
+
+            # Title: 13px, weight 500, primary text color #f2f2f2
+            title_lbl = QLabel(it.get("title", ""))
+            title_lbl.setFont(_island_font(9.5, weight=QFont.Weight.Medium))
+            title_lbl.setStyleSheet(f"color: {C_WHITE}; background: transparent; border: none;")
+            title_lbl.setWordWrap(True)
+            ilay.addWidget(title_lbl)
+
+            # Snippet: 12px, secondary/muted text color #8a8f8d, 2-line clamp
+            snippet_font = _island_font(8.5)
+            clamped_snippet = _clamp_to_2_lines(it.get("snippet", ""), snippet_font, max_width=available_text_w)
+            snippet_lbl = QLabel(clamped_snippet)
+            snippet_lbl.setFont(snippet_font)
+            snippet_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; border: none;")
+            snippet_lbl.setWordWrap(False)
+            ilay.addWidget(snippet_lbl)
+
+            # Source link: 11px, C_PRI accent color #2ee672, linkActivated handler
+            link_url = it.get("sourceLink", "")
+            safe_href = html.escape(link_url, quote=True)
+            safe_text = html.escape(link_url)
+
+            link_lbl = QLabel()
+            link_lbl.setText(f'<a href="{safe_href}" style="color: {C_PRI}; text-decoration: none;">{safe_text}</a>')
+            link_lbl.setFont(_island_font(8))
+            link_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            link_lbl.setStyleSheet(f"""
+                QLabel {{
+                    background: transparent;
+                    border: none;
+                }}
+                QLabel:hover {{
+                    text-decoration: underline;
+                }}
+            """)
+            link_lbl.linkActivated.connect(_open_source_link)
+            ilay.addWidget(link_lbl)
+
+            self._list_items_lay.addWidget(item_frame)
+
+        self._list_items_lay.addStretch(1)
+
+    def _animate_resize(self, target_w: int, target_h: int, start_geom: QRect | None = None):
+        self._target_expanded_w = target_w
+        self._target_expanded_h = target_h
+
+        if not self._is_expanded:
+            return
+
+        curr_geom = start_geom or self.geometry()
+        if curr_geom.width() == target_w and curr_geom.height() == target_h:
+            return
+
+        center_x = curr_geom.center().x()
+        new_x = center_x - target_w // 2
+        new_y = curr_geom.y()
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        target_geom = QRect(new_x, new_y, target_w, target_h)
+
+        if target_geom.right() > screen.right():
+            target_geom.moveRight(screen.right() - 8)
+        if target_geom.left() < screen.left():
+            target_geom.moveLeft(screen.left() + 8)
+        if target_geom.bottom() > screen.bottom():
+            target_geom.moveBottom(screen.bottom() - 8)
+        if target_geom.top() < screen.top():
+            target_geom.moveTop(screen.top() + 8)
+
+        self._anim = QPropertyAnimation(self, b"geometry")
+        self._anim.setDuration(220)
+        self._anim.setStartValue(curr_geom)
+        self._anim.setEndValue(target_geom)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.start()
 
     # ── Transitions & Expansion ──────────────────────────────────────────────
     def expand(self):
-        """Transition from STATE 1 (collapsed pill) to STATE 2 (mid-expand card)."""
+        """Transition from STATE 1 (collapsed pill) directly to expanded card in one animation."""
         if self._is_expanded:
             return
         self._is_expanded = True
 
+        target_w = getattr(self, "_target_expanded_w", self.EXPANDED_W)
+        target_h = getattr(self, "_target_expanded_h", self.EXPANDED_H)
+
         curr_geom = self.geometry()
-        target_geom = QRect(curr_geom.x(), curr_geom.y(), self.EXPANDED_W, self.EXPANDED_H)
+        center_x = curr_geom.center().x()
+        new_x = center_x - target_w // 2
+        new_y = curr_geom.y()
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        target_geom = QRect(new_x, new_y, target_w, target_h)
 
         # Keep on screen
-        screen = QApplication.primaryScreen().availableGeometry()
         if target_geom.right() > screen.right():
             target_geom.moveRight(screen.right() - 8)
+        if target_geom.left() < screen.left():
+            target_geom.moveLeft(screen.left() + 8)
         if target_geom.bottom() > screen.bottom():
             target_geom.moveBottom(screen.bottom() - 8)
+        if target_geom.top() < screen.top():
+            target_geom.moveTop(screen.top() + 8)
 
         self._pill_widget.hide()
         self._card_widget.show()
@@ -635,7 +1127,21 @@ class FloatingIsland(QWidget):
         self._is_expanded = False
 
         curr_geom = self.geometry()
-        target_geom = QRect(curr_geom.x(), curr_geom.y(), self.COLLAPSED_W, self.COLLAPSED_H)
+        center_x = curr_geom.center().x()
+        new_x = center_x - self.COLLAPSED_W // 2
+        new_y = curr_geom.y()
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        target_geom = QRect(new_x, new_y, self.COLLAPSED_W, self.COLLAPSED_H)
+
+        if target_geom.right() > screen.right():
+            target_geom.moveRight(screen.right() - 8)
+        if target_geom.left() < screen.left():
+            target_geom.moveLeft(screen.left() + 8)
+        if target_geom.bottom() > screen.bottom():
+            target_geom.moveBottom(screen.bottom() - 8)
+        if target_geom.top() < screen.top():
+            target_geom.moveTop(screen.top() + 8)
 
         # Switch containers immediately so layout minimum height drops to pill height
         self._card_widget.hide()

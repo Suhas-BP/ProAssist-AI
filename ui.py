@@ -3344,6 +3344,7 @@ class RemoteKeyOverlay(QWidget):
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
+    _mute_sig       = pyqtSignal(bool)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
@@ -5921,12 +5922,13 @@ class MainWindow(QMainWindow):
         self._muted = not self._muted
         self.hud.muted = self._muted
         self._style_mute_btn()
-        if self._muted:
-            self._apply_state("MUTED")
-            self._log.append_log("SYS: Microphone muted.")
-        else:
-            self._apply_state("LISTENING")
-            self._log.append_log("SYS: Microphone active.")
+        st = "MUTED" if self._muted else "LISTENING"
+        self._apply_state(st)
+        self._log.append_log("SYS: Microphone muted." if self._muted else "SYS: Microphone active.")
+        if hasattr(self, "_mute_sig"):
+            self._mute_sig.emit(self._muted)
+        if hasattr(self, "_floating_island") and self._floating_island:
+            self._floating_island.set_mic_muted(self._muted)
 
     def _style_mute_btn(self):
         if self._muted:
@@ -5973,6 +5975,8 @@ class MainWindow(QMainWindow):
                 "SLEEPING":  f'Sleeping — say "{self._assistant_name.capitalize()}" to wake',
             }.get(state, f'{state.capitalize()} — say "{self._assistant_name.capitalize()}" to wake')
             self._status_pill.setText(f"●  {txt}")
+        if hasattr(self, "_floating_island") and self._floating_island:
+            self._floating_island.on_state_changed(state)
 
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False
@@ -6025,8 +6029,8 @@ class AgentUI:
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
-        # Start in floating island mode by default
-        self._win.hide()
+        # Show MainWindow and Floating Island on startup
+        self._win.show()
         if hasattr(self._win, "_floating_island") and self._win._floating_island:
             self._win._floating_island.show()
             self._win._floating_island.raise_()
