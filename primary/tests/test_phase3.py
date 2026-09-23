@@ -284,16 +284,17 @@ def test_15_phase1_authentication_requirement():
     from voice_auth.verifier import VoiceVerifier
     verifier = VoiceVerifier()
     created_temp = False
-    if not verifier.is_enrolled():
-        dummy_vp = np.zeros(256, dtype=np.float32)
-        dummy_vp[0] = 1.0
-        config.VOICEPRINT_DIR.mkdir(parents=True, exist_ok=True)
-        np.save(config.VOICEPRINT_PATH, dummy_vp)
-        verifier.load_voiceprint()
-        created_temp = True
-        assert verifier.is_enrolled(), "Phase 1 voiceprint must be enrolled"
-        assert verifier.threshold == 0.50, "Threshold must remain 0.50"
-        assert config.VOICE_SIMILARITY_THRESHOLD == 0.50, "Config threshold must remain 0.50"
+    try:
+        if not verifier.is_enrolled():
+            dummy_vp = np.zeros(256, dtype=np.float32)
+            dummy_vp[0] = 1.0
+            config.VOICEPRINT_DIR.mkdir(parents=True, exist_ok=True)
+            np.save(config.VOICEPRINT_PATH, dummy_vp)
+            verifier.load_voiceprint()
+            created_temp = True
+            assert verifier.is_enrolled(), "Phase 1 voiceprint must be enrolled"
+            assert verifier.threshold == 0.50, "Threshold must remain 0.50"
+            assert config.VOICE_SIMILARITY_THRESHOLD == 0.50, "Config threshold must remain 0.50"
     finally:
         if created_temp and config.VOICEPRINT_PATH.exists():
             os.remove(config.VOICEPRINT_PATH)

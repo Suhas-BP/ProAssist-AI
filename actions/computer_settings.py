@@ -80,11 +80,59 @@ def volume_down():
         subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", "-10%"],
             capture_output=True)
 
+def _get_windows_volume():
+    """Returns POINTER(IAudioEndpointVolume) or None."""
+    try:
+        from ctypes import cast, POINTER
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        speakers = AudioUtilities.GetSpeakers()
+        vol = getattr(speakers, "EndpointVolume", None)
+        if vol is None and hasattr(speakers, "Activate"):
+            interface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            vol = cast(interface, POINTER(IAudioEndpointVolume))
+        return vol
+    except Exception as e:
+        print(f"[Settings] Windows volume lookup failed: {e}")
+        return None
+
 def volume_mute():
     if _OS == "Windows":
-        pyautogui.press("volumemute")
+        vol = _get_windows_volume()
+        if vol:
+            vol.SetMute(1, None)
+            return
+        print("[Settings] Could not mute: volume control unavailable")
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e", "set volume with output muted"],
+            capture_output=True)
+    else:
+        subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"],
+            capture_output=True)
+
+def volume_unmute():
+    if _OS == "Windows":
+        vol = _get_windows_volume()
+        if vol:
+            vol.SetMute(0, None)
+            return
+        print("[Settings] Could not unmute: volume control unavailable")
+    elif _OS == "Darwin":
+        subprocess.run(["osascript", "-e", "set volume without output muted"],
+            capture_output=True)
+    else:
+        subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+            capture_output=True)
+
+def volume_toggle_mute():
+    if _OS == "Windows":
+        vol = _get_windows_volume()
+        if vol:
+            cur = bool(vol.GetMute())
+            vol.SetMute(0 if cur else 1, None)
+            return
+    elif _OS == "Darwin":
+        subprocess.run(["osascript", "-e", "set volume output muted (not (output muted of (get volume settings)))"],
             capture_output=True)
     else:
         subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"],
@@ -98,17 +146,11 @@ def volume_get() -> int | None:
     undoable — a wrong undo is worse than no undo."""
     try:
         if _OS == "Windows":
-            import math
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            devices   = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            vol       = cast(interface, POINTER(IAudioEndpointVolume))
-            db        = vol.GetMasterVolumeLevel()
-            if db <= -65.0:
-                return 0
-            return max(0, min(100, round(10 ** (db / 20) * 100)))
+            vol = _get_windows_volume()
+            if vol:
+                scalar = vol.GetMasterVolumeLevelScalar()
+                return max(0, min(100, round(scalar * 100)))
+            return None
         if _OS == "Darwin":
             r = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"],
                                capture_output=True, text=True, timeout=5)
@@ -163,20 +205,14 @@ def volume_set(value: int):
     value = max(0, min(100, int(value)))
     if _OS == "Windows":
         try:
-            import math
-            from ctypes import cast, POINTER
-            from comtypes import CLSCTX_ALL
-            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            devices   = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            vol       = cast(interface, POINTER(IAudioEndpointVolume))
-            vol_db    = -65.25 if value == 0 else max(-65.25, 20 * math.log10(value / 100))
-            vol.SetMasterVolumeLevel(vol_db, None)
-            return
+            vol = _get_windows_volume()
+            if vol:
+                vol.SetMasterVolumeLevelScalar(value / 100.0, None)
+                if value > 0 and vol.GetMute():
+                    vol.SetMute(0, None)
+                return
         except Exception as e:
-            print(f"[Settings] pycaw failed, using keypress fallback: {e}")
-            pyautogui.press("volumemute")
-            pyautogui.press("volumemute")
+            print(f"[Settings] pycaw volume_set failed: {e}")
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e", f"set volume output volume {value}"],
             capture_output=True)
@@ -596,8 +632,8 @@ ACTION_MAP: dict[str, callable] = {
     "volume_up":           volume_up,
     "volume_down":         volume_down,
     "mute":                volume_mute,
-    "unmute":              volume_mute,
-    "toggle_mute":         volume_mute,
+    "unmute":              volume_unmute,
+    "toggle_mute":         volume_toggle_mute,
     "brightness_up":       brightness_up,
     "brightness_down":     brightness_down,
     "sleep_display":       sleep_display,

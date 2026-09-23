@@ -86,13 +86,40 @@ _chosen_api: dict = {"input": None, "output": None}
 # DirectSound for the microphone and MME for the speakers — a split that no
 # amount of reasoning would have produced.
 _PREFERRED_APIS = {
-    "Windows": ("directsound", "mme", "wasapi"),
+    "Windows": {
+        "input":  ("directsound", "mme", "wasapi"),
+        "output": ("mme", "wasapi"),  # DirectSound output is a silent 0ms sink on Windows PortAudio
+    },
     # macOS has only Core Audio, so there is nothing to disambiguate.
     "Darwin":  ("core audio",),
     # PulseAudio/PipeWire present one clean endpoint per device; raw ALSA
     # presents dozens of routing permutations of the same card.
     "Linux":   ("pulse", "pipewire", "jack", "alsa"),
 }
+
+def _get_preferred(system: str, kind: str) -> tuple[str, ...]:
+    entry = _PREFERRED_APIS.get(system, ())
+    if isinstance(entry, dict):
+        return tuple(entry.get(kind, ()))
+    return tuple(entry)
+
+
+def ensure_unmuted() -> bool:
+    """Ensure the system default playback endpoint is not muted in Windows OS.
+    Returns True if an active mute was detected and cleared, False otherwise."""
+    try:
+        import platform
+        if platform.system() == "Windows":
+            from pycaw.pycaw import AudioUtilities
+            speakers = AudioUtilities.GetSpeakers()
+            vol = getattr(speakers, "EndpointVolume", None)
+            if vol is not None and bool(vol.GetMute()):
+                vol.SetMute(0, None)
+                print("[Audio] Notice: Output device was muted in Windows; unmuted for speech.")
+                return True
+    except Exception as e:
+        print(f"[Audio] ensure_unmuted failed: {e}")
+    return False
 
 # ── "It opens" is not "it works" ─────────────────────────────────────────────
 #
@@ -298,7 +325,8 @@ def _query() -> dict[str, list[str]]:
         # speakers only work on MME — and a single global choice cannot be right
         # for both.
         for kind in ("input", "output"):
-            for api_filter in list(preferred) + [None]:
+            pref_apis = _get_preferred(platform.system(), kind)
+            for api_filter in list(pref_apis) + [None]:
                 found = _collect(api_filter, kind)
                 if not found:
                     continue
@@ -390,8 +418,9 @@ def resolve(name: str, kind: str):
         # populates it; calling it here is a no-op once the cache is warm.
         list_devices(kind)
         chosen = _chosen_api.get(kind)
+        pref_list = _get_preferred(platform.system(), kind)
         orders = ([chosen] if chosen is not None else []) \
-            + [a for a in _PREFERRED_APIS.get(platform.system(), ()) if a != chosen] \
+            + [a for a in pref_list if a != chosen] \
             + [None]
 
         # A candidate only counts if it can be opened at the rate this side runs

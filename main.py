@@ -1833,6 +1833,9 @@ class AgentLive:
         if _spk_dev is not None:
             print(f"[AGENT] 🔊 Output device: {_spk_name}")
 
+        if audio_devices.ensure_unmuted():
+            self.ui.write_log("SYS: Speaker was muted in Windows — unmuted for assistant speech.")
+
         def _open_spk(dev):
             st = sd.RawOutputStream(
                 samplerate=RECEIVE_SAMPLE_RATE,
@@ -1886,6 +1889,9 @@ class AgentLive:
                         self._turn_done_event.clear()
                     continue
 
+                if not getattr(self, "_is_speaking", False):
+                    if audio_devices.ensure_unmuted():
+                        self.ui.write_log("SYS: Speaker was muted in Windows — unmuted for assistant speech.")
                 self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
