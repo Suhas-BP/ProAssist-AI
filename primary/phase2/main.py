@@ -12,11 +12,14 @@ import signal
 from pathlib import Path
 import numpy as np
 
-# Ensure immediate unbuffered output for live debugging telemetry
-try:
-    sys.stdout.reconfigure(line_buffering=True)
-except Exception:
-    pass
+# Ensure UTF-8 console encoding and immediate unbuffered output for live debugging telemetry
+for _stream in ("stdout", "stderr"):
+    try:
+        _s = getattr(sys, _stream, None)
+        if _s is not None and hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except Exception:
+        pass
 
 
 # Add project root to sys.path and remove script directory to avoid shadowing stdlib

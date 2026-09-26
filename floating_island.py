@@ -22,6 +22,7 @@ Features:
 """
 
 import sys
+import re
 import math
 import html
 import webbrowser
@@ -255,7 +256,7 @@ class StatusCircle(QWidget):
 
     def _tick(self):
         self._pulse = (self._pulse + 0.06) % (2 * math.pi)
-        if self._state in ("SPEAKING", "LISTENING", "THINKING"):
+        if self._state in ("SPEAKING", "LISTENING", "THINKING", "WORKING"):
             self.update()
 
     def paintEvent(self, _):
@@ -276,6 +277,8 @@ class StatusCircle(QWidget):
         # State styling
         if self._state == "MUTED":
             arc_color = C_DANGER
+        elif self._state == "WORKING":
+            arc_color = "#3b82f6"
         elif self._state in ("LISTENING", "SPEAKING"):
             arc_color = C_PRI
         else:
@@ -345,6 +348,13 @@ class FloatingIsland(QWidget):
         self._assistant_name = "ProAssist AI"
         if main_window and hasattr(main_window, "_assistant_name"):
             self._assistant_name = (main_window._assistant_name.strip() or "ProAssist AI")
+
+        self._auth_challenge_active = False
+        self._pending_content_payload = None
+        self._content_debounce_timer = QTimer(self)
+        self._content_debounce_timer.setSingleShot(True)
+        self._content_debounce_timer.setInterval(80)
+        self._content_debounce_timer.timeout.connect(self._flush_debounced_content)
 
         # Initial size and screen positioning
         self.resize(self.COLLAPSED_W, self.COLLAPSED_H)
@@ -773,7 +783,7 @@ class FloatingIsland(QWidget):
             # Set initial value
             self._tile_cpu_lbl.setText(self._main_window._bar_cpu._text)
 
-        # Wire voice auth enrollment signal
+        # Wire voice auth enrollment & challenge completion signals
         if hasattr(self._main_window, "_voice_auth_sig"):
             self._main_window._voice_auth_sig.connect(self.on_voice_auth_updated)
 
@@ -781,9 +791,37 @@ class FloatingIsland(QWidget):
         if hasattr(self._main_window, "_mute_sig"):
             self._main_window._mute_sig.connect(self.set_mic_muted)
 
+        # Wire content display signal (Task 1: structured response -> secondary card)
+        if hasattr(self._main_window, "_content_sig"):
+            self._main_window._content_sig.connect(self.on_content_received)
+
+        # Wire log stream signal (Task 2: auth challenge phrase detection)
+        if hasattr(self._main_window, "_log_sig"):
+            self._main_window._log_sig.connect(self.on_log_received)
+
         # Initial mute sync
         if hasattr(self._main_window, "_muted"):
             self.set_mic_muted(bool(self._main_window._muted))
+
+    # ── View-State Machine (Primary ↔ Secondary) ─────────────────────────────
+    @property
+    def widget_view_state(self) -> str:
+        """Single view-state property: 'primary' (compact pill) | 'secondary' (card)."""
+        return "secondary" if self._is_expanded else "primary"
+
+    @widget_view_state.setter
+    def widget_view_state(self, state: str):
+        self.set_view_state(state)
+
+    def set_view_state(self, state: str):
+        """Transition between primary (collapsed pill) and secondary (expanded card)."""
+        st = str(state).lower().strip()
+        if st == "secondary":
+            if not self._is_expanded:
+                self.expand()
+        elif st == "primary":
+            if self._is_expanded:
+                self.collapse()
 
     # ── Actions & Helpers ────────────────────────────────────────────────────
     def _toggle_mic(self):
@@ -852,6 +890,10 @@ class FloatingIsland(QWidget):
             self._tile_sec_lbl.setText("Locked")
             self._tile_sec_ico.setIcon(icon("shield-check", active=False))
 
+        # When auth resolves, release challenge lock and auto-transition to primary
+        self._auth_challenge_active = False
+        QTimer.singleShot(1200, lambda: self.set_view_state("primary"))
+
     def on_state_changed(self, state: str):
         st = state.upper()
         self._status_circle.set_state(st)
@@ -859,12 +901,18 @@ class FloatingIsland(QWidget):
         # Waveform active in listening/speaking
         self._waveform.set_active(st in ("LISTENING", "SPEAKING"))
 
+        # Task 1: Auto-collapse back to primary when a new turn / user query begins
+        if st in ("LISTENING", "THINKING"):
+            if not self._auth_challenge_active:
+                self.set_view_state("primary")
+
         # Format status text
         aname = self._assistant_name.capitalize()
         status_map = {
             "LISTENING": ("Listening", "Listening — speak now", "#2ee672", True),
             "THINKING":  ("Thinking", "Thinking…", "#ffaa00", True),
             "PROCESSING":("Processing", "Processing…", "#ffaa00", True),
+            "WORKING":   ("Working", "Working on task…", "#3b82f6", True),
             "SPEAKING":  ("Speaking", "Speaking…", "#2ee672", True),
             "MUTED":     ("Muted", "Microphone muted", "#ff4444", False),
             "SLEEPING":  ("Sleeping", f'Sleeping — say "{aname}" to wake', "#4fe28c", True),
@@ -886,10 +934,114 @@ class FloatingIsland(QWidget):
         elif st in ("LISTENING", "SPEAKING"):
             self.set_mic_muted(False)
 
+    # ── Signal Handlers for Content & Auth ───────────────────────────────────
+    def _flush_debounced_content(self):
+        if self._pending_content_payload is not None:
+            self.set_info(self._pending_content_payload)
+            self._pending_content_payload = None
+
+    def on_content_received(self, title: str, text: str):
+        """
+        Task 1 & Bug 2: Normalize response payloads (DDG, Gemini, API outputs)
+        into structured {title, summary, source, url} schema and debounce rapid updates.
+        """
+        if not text or not text.strip():
+            return
+
+        clean_text = text.strip()
+        lines = [ln.strip() for ln in clean_text.split("\n") if ln.strip()]
+
+        # 1. Parse structured list items (DDG / News / Markdown numbered / bullet lists)
+        if len(lines) > 1 and any(l.startswith(("-", "*", "•", "1.", "2.", "3.", "http")) or "Source:" in l for l in lines):
+            items = []
+            curr_title = ""
+            curr_snippet = ""
+            curr_link = ""
+            for l in lines:
+                if l.lower().startswith("source:"):
+                    curr_link = l.split(":", 1)[1].strip()
+                    if curr_title:
+                        items.append({"title": curr_title, "snippet": curr_snippet, "sourceLink": curr_link})
+                        curr_title, curr_snippet, curr_link = "", "", ""
+                elif l.startswith("http://") or l.startswith("https://"):
+                    curr_link = l
+                    if curr_title:
+                        items.append({"title": curr_title, "snippet": curr_snippet, "sourceLink": curr_link})
+                        curr_title, curr_snippet, curr_link = "", "", ""
+                elif re.match(r"^[\d]+[.\)\-]", l) or l.startswith(("-", "*", "•")):
+                    if curr_title:
+                        items.append({"title": curr_title, "snippet": curr_snippet, "sourceLink": curr_link})
+                        curr_snippet, curr_link = "", ""
+                    curr_title = re.sub(r"^[\d]+[.\)\-]\s*", "", l).lstrip("-*• ")
+                elif not curr_title:
+                    curr_title = l
+                else:
+                    curr_snippet = (curr_snippet + " " + l).strip() if curr_snippet else l
+
+            if curr_title:
+                items.append({"title": curr_title, "snippet": curr_snippet, "sourceLink": curr_link})
+
+            if items:
+                self._pending_content_payload = {
+                    "type": "list",
+                    "sourceLabel": title[:24] if title else "Search Results",
+                    "updatedLabel": "Just now",
+                    "icon": "layout-grid-add",
+                    "items": items[:6],
+                }
+                self._content_debounce_timer.start()
+                return
+
+        # 2. Single-value / headline summary normalization
+        summary_text = clean_text
+        item_header = title or "Summary"
+        if len(lines) >= 2 and not title:
+            item_header = lines[0]
+            summary_text = " ".join(lines[1:])
+
+        self._pending_content_payload = {
+            "type": "value",
+            "sourceLabel": title[:24] if title else "Agent Response",
+            "updatedLabel": "Just now",
+            "icon": "broadcast",
+            "itemName": item_header,
+            "value": summary_text[:240],
+            "delta": "",
+            "trend": None,
+        }
+        self._content_debounce_timer.start()
+
+    def on_log_received(self, log_line: str):
+        """
+        Task 2: Listen for voice authentication challenge sentence and resolution logs.
+        """
+        if not log_line:
+            return
+
+        if "AUTH: Authentication sentence:" in log_line:
+            phrase = log_line.split("AUTH: Authentication sentence:", 1)[1].strip()
+            if phrase:
+                self._auth_challenge_active = True
+                self.set_info({
+                    "type": "value",
+                    "sourceLabel": "Voice Authentication",
+                    "updatedLabel": "Challenge Phrase",
+                    "icon": "shield-check",
+                    "itemName": "Please speak this sentence clearly:",
+                    "value": f'"{phrase}"',
+                    "delta": "AUTH",
+                    "trend": None
+                })
+                self.set_view_state("secondary")
+
+        elif any(k in log_line for k in ("AUTH: Verified", "AUTH: User not identified", "AUTH: Session ended")):
+            self._auth_challenge_active = False
+            QTimer.singleShot(1200, lambda: self.set_view_state("primary"))
+
     # ── Info Card & Multi-Item List ──────────────────────────────────────────
     def set_info(self, payload: dict | None = None):
         """
-        Extend the info-card with discriminated type:
+        Extend the info-card with discriminated type and auto-switch to secondary view:
         payload = {
             "type": "value" | "list",
             "sourceLabel": str,
@@ -911,8 +1063,8 @@ class FloatingIsland(QWidget):
             self._content_stack.setCurrentWidget(self._status_container)
             self._target_expanded_w = self.EXPANDED_W
             self._target_expanded_h = self.EXPANDED_H
-            if self._is_expanded:
-                self._animate_resize(self.EXPANDED_W, self.EXPANDED_H)
+            if self._is_expanded and not self._auth_challenge_active:
+                self.collapse()
             return
 
         start_geom = self.geometry()
@@ -924,6 +1076,8 @@ class FloatingIsland(QWidget):
             self._target_expanded_h = self.EXPANDED_LIST_H
             if self._is_expanded:
                 self._animate_resize(self.EXPANDED_LIST_W, self.EXPANDED_LIST_H, start_geom=start_geom)
+            else:
+                self.expand()
         else:
             self._render_value_block(payload)
             self._content_stack.setCurrentWidget(self._info_value_container)
@@ -931,6 +1085,8 @@ class FloatingIsland(QWidget):
             self._target_expanded_h = self.EXPANDED_H
             if self._is_expanded:
                 self._animate_resize(self.EXPANDED_W, self.EXPANDED_H, start_geom=start_geom)
+            else:
+                self.expand()
 
     def _render_value_block(self, payload: dict):
         source_txt = payload.get("sourceLabel", "Market")
@@ -947,28 +1103,42 @@ class FloatingIsland(QWidget):
 
         val_str = str(payload.get("value", "—"))
         self._val_value_lbl.setText(val_str)
-
-        delta_str = str(payload.get("delta", "+0.0%"))
-        self._val_delta_lbl.setText(delta_str)
-        if delta_str.startswith("-"):
-            self._val_delta_lbl.setStyleSheet(f"""
-                color: {C_DANGER};
-                background: #2a1414;
-                border: 1px solid #5a2323;
-                border-radius: 8px;
-                padding: 2px 6px;
-            """)
+        if len(val_str) > 24:
+            self._val_value_lbl.setFont(_island_font(11.5, bold=False))
+            self._val_value_lbl.setWordWrap(True)
         else:
-            self._val_delta_lbl.setStyleSheet(f"""
-                color: {C_PRI};
-                background: #1c1e1d;
-                border: 1px solid {C_TILE_BORDER};
-                border-radius: 8px;
-                padding: 2px 6px;
-            """)
+            self._val_value_lbl.setFont(_island_font(18, bold=True))
+            self._val_value_lbl.setWordWrap(True)
+
+        delta_str = str(payload.get("delta", ""))
+        if delta_str:
+            self._val_delta_lbl.setText(delta_str)
+            self._val_delta_lbl.show()
+            if delta_str.startswith("-"):
+                self._val_delta_lbl.setStyleSheet(f"""
+                    color: {C_DANGER};
+                    background: #2a1414;
+                    border: 1px solid #5a2323;
+                    border-radius: 8px;
+                    padding: 2px 6px;
+                """)
+            else:
+                self._val_delta_lbl.setStyleSheet(f"""
+                    color: {C_PRI};
+                    background: #1c1e1d;
+                    border: 1px solid {C_TILE_BORDER};
+                    border-radius: 8px;
+                    padding: 2px 6px;
+                """)
+        else:
+            self._val_delta_lbl.hide()
 
         trend = payload.get("trend")
-        self._val_sparkline.set_points(trend)
+        if trend and len(trend) >= 2:
+            self._val_sparkline.set_points(trend)
+            self._val_sparkline.show()
+        else:
+            self._val_sparkline.hide()
 
     def _render_list_block(self, payload: dict):
         source_txt = payload.get("sourceLabel", "Search")

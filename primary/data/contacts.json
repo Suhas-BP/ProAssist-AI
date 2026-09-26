@@ -2,5 +2,9 @@
   "rahul": {
     "name": "Rahul",
     "email": "rahul@example.com"
+  },
+  "suhas": {
+    "name": "Suhas B P",
+    "nickname": "Suhas BP"
   }
 }

@@ -21,6 +21,12 @@ try:
 except ImportError:
     _PYPERCLIP = False
 
+try:
+    import psutil
+    _PSUTIL = True
+except ImportError:
+    _PSUTIL = False
+
 from core import confirm
 from core.undo import push_undo
 
@@ -608,6 +614,270 @@ def toggle_wifi():
         except Exception as e:
             print(f"[Settings] toggle_wifi Linux failed: {e}")
 
+def wifi_status() -> dict:
+    """Query Wi-Fi status, connection state, SSID, and signal."""
+    if _OS == "Windows":
+        try:
+            res = subprocess.run(
+                ["netsh", "wlan", "show", "interfaces"],
+                capture_output=True, text=True, timeout=5, **_WIN_HIDE
+            )
+            data = {}
+            for line in res.stdout.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    data[k.strip().lower()] = v.strip()
+            state = data.get("state", "disconnected").lower()
+            adapter = data.get("description", "Wi-Fi Adapter")
+            if state == "connected":
+                ssid = data.get("ssid", "Unknown")
+                signal = data.get("signal", "Unknown")
+                radio = data.get("radio type", "")
+                return {
+                    "connected": True,
+                    "state": state,
+                    "ssid": ssid,
+                    "signal": signal,
+                    "adapter": adapter,
+                    "radio_type": radio,
+                    "message": f"Wi-Fi is connected to '{ssid}' with {signal} signal strength.",
+                }
+            elif state == "disconnected":
+                return {
+                    "connected": False,
+                    "state": state,
+                    "ssid": None,
+                    "signal": None,
+                    "adapter": adapter,
+                    "radio_type": None,
+                    "message": "Wi-Fi is enabled but disconnected from any network.",
+                }
+            else:
+                return {
+                    "connected": False,
+                    "state": state,
+                    "ssid": None,
+                    "signal": None,
+                    "adapter": adapter,
+                    "radio_type": None,
+                    "message": f"Wi-Fi interface state: {state}.",
+                }
+        except Exception as e:
+            return {
+                "connected": False,
+                "state": "error",
+                "ssid": None,
+                "signal": None,
+                "adapter": None,
+                "radio_type": None,
+                "message": f"Could not query Wi-Fi status on Windows: {e}",
+            }
+    elif _OS == "Darwin":
+        try:
+            iface = _get_macos_wifi_interface()
+            res = subprocess.run(
+                ["networksetup", "-getairportnetwork", iface],
+                capture_output=True, text=True, timeout=5
+            )
+            out = res.stdout.strip()
+            if "Current Wi-Fi Network:" in out:
+                ssid = out.split("Current Wi-Fi Network:", 1)[1].strip()
+                return {
+                    "connected": True,
+                    "state": "connected",
+                    "ssid": ssid,
+                    "signal": None,
+                    "adapter": iface,
+                    "radio_type": None,
+                    "message": f"Wi-Fi is connected to '{ssid}'.",
+                }
+            return {
+                "connected": False,
+                "state": "disconnected",
+                "ssid": None,
+                "signal": None,
+                "adapter": iface,
+                "radio_type": None,
+                "message": "Wi-Fi is not connected to any network.",
+            }
+        except Exception as e:
+            return {
+                "connected": False,
+                "state": "error",
+                "ssid": None,
+                "signal": None,
+                "adapter": None,
+                "radio_type": None,
+                "message": f"Could not query Wi-Fi status on macOS: {e}",
+            }
+    else:  # Linux
+        try:
+            res = subprocess.run(
+                ["nmcli", "-t", "-f", "active,ssid,signal,device", "wifi"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in res.stdout.splitlines():
+                parts = line.strip().split(":")
+                if len(parts) >= 4 and parts[0] == "yes":
+                    ssid = parts[1]
+                    signal = parts[2]
+                    dev = parts[3]
+                    return {
+                        "connected": True,
+                        "state": "connected",
+                        "ssid": ssid,
+                        "signal": f"{signal}%",
+                        "adapter": dev,
+                        "radio_type": None,
+                        "message": f"Wi-Fi is connected to '{ssid}' ({signal}% signal).",
+                    }
+            return {
+                "connected": False,
+                "state": "disconnected",
+                "ssid": None,
+                "signal": None,
+                "adapter": None,
+                "radio_type": None,
+                "message": "Wi-Fi is not connected.",
+            }
+        except Exception as e:
+            return {
+                "connected": False,
+                "state": "error",
+                "ssid": None,
+                "signal": None,
+                "adapter": None,
+                "radio_type": None,
+                "message": f"Could not query Wi-Fi status on Linux: {e}",
+            }
+
+
+def battery_status() -> dict:
+    """Query battery percentage, charging state, and remaining runtime."""
+    try:
+        if _PSUTIL:
+            b = psutil.sensors_battery()
+            if b is not None:
+                pct = round(b.percent)
+                plugged = bool(b.power_plugged)
+                secs = b.secsleft
+                stat = "Plugged in / Charging" if plugged else "On battery (discharging)"
+                t_rem = ""
+                if secs > 0 and not plugged:
+                    hrs = secs // 3600
+                    mins = (secs % 3600) // 60
+                    t_rem = f" (~{hrs}h {mins}m remaining)"
+                return {
+                    "percent": pct,
+                    "plugged": plugged,
+                    "secs_left": secs if secs > 0 else None,
+                    "has_battery": True,
+                    "message": f"Battery is at {pct}%, {stat}{t_rem}."
+                }
+        return {
+            "percent": None,
+            "plugged": True,
+            "secs_left": None,
+            "has_battery": False,
+            "message": "No battery detected (desktop or AC-only power system)."
+        }
+    except Exception as e:
+        return {
+            "percent": None,
+            "plugged": None,
+            "secs_left": None,
+            "has_battery": False,
+            "message": f"Could not query battery status: {e}"
+        }
+
+
+def bluetooth_status() -> dict:
+    """Query Bluetooth service status, availability, and active connected devices."""
+    if _OS == "Windows":
+        ps_cmd = (
+            "$svc = Get-Service bthserv -ErrorAction SilentlyContinue; "
+            "$svc_status = if ($svc) { $svc.Status.ToString() } else { 'Unavailable' }; "
+            "$devs = @(Get-PnpDevice -Class Bluetooth -Status OK -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Present -eq $true } | Select-Object -ExpandProperty FriendlyName); "
+            "$obj = [PSCustomObject]@{ "
+            "  service = $svc_status; "
+            "  enabled = ($svc_status -eq 'Running'); "
+            "  devices = $devs "
+            "}; "
+            "$obj | ConvertTo-Json -Compress"
+        )
+        try:
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=8, **_WIN_HIDE
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                data = json.loads(res.stdout.strip())
+                raw_devs = data.get("devices") or []
+                if isinstance(raw_devs, str):
+                    raw_devs = [raw_devs]
+                ignored_keywords = [
+                    "generic", "enumerator", "protocol tdi", "gateway service",
+                    "avrcp transport", "push service", "access service",
+                    "pse service", "pan service", "area network"
+                ]
+                meaningful_devs = []
+                for d in raw_devs:
+                    d_low = d.lower()
+                    if not any(k in d_low for k in ignored_keywords):
+                        if d not in meaningful_devs:
+                            meaningful_devs.append(d)
+
+                enabled = bool(data.get("enabled", False))
+                service_status = data.get("service", "Unknown")
+                if enabled:
+                    if meaningful_devs:
+                        dev_str = ", ".join(meaningful_devs[:5])
+                        msg = f"Bluetooth is enabled (Service: {service_status}). Active devices: {dev_str}."
+                    else:
+                        msg = f"Bluetooth is enabled (Service: {service_status}), with no active paired devices connected."
+                else:
+                    msg = f"Bluetooth service is {service_status}."
+
+                return {
+                    "enabled": enabled,
+                    "service": service_status,
+                    "devices": meaningful_devs,
+                    "message": msg
+                }
+        except Exception as e:
+            return {"enabled": False, "service": "Error", "devices": [], "message": f"Could not query Bluetooth: {e}"}
+
+    elif _OS == "Darwin":
+        try:
+            res = subprocess.run(
+                ["defaults", "read", "/Library/Preferences/com.apple.Bluetooth", "ControllerPowerState"],
+                capture_output=True, text=True, timeout=5
+            )
+            enabled = res.stdout.strip() == "1"
+            return {
+                "enabled": enabled,
+                "service": "Running" if enabled else "Off",
+                "devices": [],
+                "message": f"Bluetooth is {'enabled' if enabled else 'disabled'}."
+            }
+        except Exception as e:
+            return {"enabled": False, "service": "Error", "devices": [], "message": f"Bluetooth query failed: {e}"}
+
+    else:  # Linux
+        try:
+            res = subprocess.run(["rfkill", "list", "bluetooth"], capture_output=True, text=True, timeout=5)
+            blocked = "Soft blocked: yes" in res.stdout or "Hard blocked: yes" in res.stdout
+            return {
+                "enabled": not blocked,
+                "service": "Blocked" if blocked else "Running",
+                "devices": [],
+                "message": f"Bluetooth is {'disabled / blocked' if blocked else 'enabled'}."
+            }
+        except Exception as e:
+            return {"enabled": False, "service": "Error", "devices": [], "message": f"Bluetooth query failed: {e}"}
+
+
 def restart_computer():
     if _OS == "Windows":
         subprocess.run(["shutdown", "/r", "/t", "10"], capture_output=True, **_WIN_HIDE)
@@ -686,6 +956,14 @@ ACTION_MAP: dict[str, callable] = {
     "open_run":            open_run,
     "dark_mode":           dark_mode,
     "toggle_wifi":         toggle_wifi,
+    "wifi_status":         wifi_status,
+    "battery_status":      battery_status,
+    "power_status":        battery_status,
+    "bluetooth_status":    bluetooth_status,
+    "volume_get":          volume_get,
+    "get_volume":          volume_get,
+    "brightness_get":      brightness_get,
+    "get_brightness":      brightness_get,
     "restart":             restart_computer,
     "shutdown":            shutdown_computer,
 }
@@ -748,6 +1026,11 @@ _ALIASES = {
     "sleep_display":   ("screen off", "turn off the screen", "display off"),
     "dark_mode":       ("night mode", "light mode", "toggle theme"),
     "toggle_wifi":     ("wifi", "wi-fi", "internet off", "internet on"),
+    "wifi_status":     ("wifi status", "wifi info", "check wifi", "network status", "is wifi connected"),
+    "battery_status":  ("battery", "battery status", "power status", "battery percentage", "check battery", "how much battery"),
+    "bluetooth_status":("bluetooth", "bluetooth status", "check bluetooth", "is bluetooth on"),
+    "volume_get":      ("get volume", "current volume", "what is the volume", "volume level"),
+    "brightness_get":  ("get brightness", "current brightness", "what is the brightness", "brightness level"),
     "task_manager":    ("processes", "task list"),
     "screenshot":      ("capture screen", "take a screenshot", "snip"),
     "refresh_page":    ("refresh", "reload page"),
@@ -756,8 +1039,12 @@ _ALIASES = {
     "restart":         ("reboot", "restart the pc"),
 }
 
-_VALUE_ACTIONS = {"volume_set", "type_text", "press_key", "reload_n",
-                  "scroll_up", "scroll_down"}
+_VALUE_ACTIONS = {
+    "volume_set", "type_text", "press_key", "reload_n",
+    "scroll_up", "scroll_down", "wifi_status", "battery_status",
+    "power_status", "bluetooth_status", "volume_get", "get_volume",
+    "brightness_get", "get_brightness",
+}
 
 
 def _normalise(text: str) -> str:
@@ -822,9 +1109,14 @@ def computer_settings(
     response=None,
     player=None,
     session_memory=None,
-) -> str:
+) -> dict:
     if not _PYAUTOGUI:
-        return "pyautogui is not installed. Run: pip install pyautogui"
+        return {
+            "success": False,
+            "action": "unknown",
+            "value": None,
+            "message": "pyautogui is not installed. Run: pip install pyautogui",
+        }
 
     params      = parameters or {}
     raw_action  = params.get("action", "").strip()
@@ -840,7 +1132,12 @@ def computer_settings(
     action = raw_action.lower().strip().replace(" ", "_").replace("-", "_")
 
     if not action:
-        return _suggest(description or raw_action)
+        return {
+            "success": False,
+            "action": raw_action or "unknown",
+            "value": None,
+            "message": _suggest(description or raw_action),
+        }
 
     print(f"[Settings] Action: {action}  Value: {value}  OS: {_OS}")
     if player:
@@ -855,14 +1152,29 @@ def computer_settings(
         title, detail = _IRREVERSIBLE[action]
         func = ACTION_MAP.get(action)
         if func is None:
-            return f"Unknown action: '{raw_action}'."
+            return {
+                "success": False,
+                "action": action,
+                "value": None,
+                "message": f"Unknown action: '{raw_action}'.",
+            }
         if confirm.pending_title():
-            return ("There is already a confirmation waiting on screen. "
-                    "Ask the user to answer that one first.")
-        return confirm.request(
+            return {
+                "success": False,
+                "action": action,
+                "value": None,
+                "message": "There is already a confirmation waiting on screen. Ask the user to answer that one first.",
+            }
+        req_msg = confirm.request(
             key=action, title=title, detail=detail,
             run=lambda f=func, a=action: (f(), f"{a} done.")[1],
         )
+        return {
+            "success": True,
+            "action": action,
+            "value": "confirmation_pending",
+            "message": req_msg,
+        }
 
     if action == "volume_set":
         try:
@@ -872,43 +1184,146 @@ def computer_settings(
             if before is not None:
                 push_undo(f"volume {before}% → {target}%",
                           lambda b=before: (volume_set(b), f"Back to {b}%.")[1])
-            return f"Volume set to {target}%."
+            return {
+                "success": True,
+                "action": "volume_set",
+                "value": target,
+                "message": f"Volume set to {target}%.",
+            }
         except Exception as e:
-            return f"Could not set volume: {e}"
+            return {
+                "success": False,
+                "action": "volume_set",
+                "value": None,
+                "message": f"Could not set volume: {e}",
+            }
+
+    if action in ("volume_get", "get_volume"):
+        cur = volume_get()
+        return {
+            "success": True,
+            "action": "volume_get",
+            "value": cur,
+            "message": f"Master volume is at {cur}%." if cur is not None else "Could not determine current volume.",
+        }
+
+    if action in ("brightness_get", "get_brightness"):
+        cur = brightness_get()
+        return {
+            "success": True,
+            "action": "brightness_get",
+            "value": cur,
+            "message": f"Screen brightness is at {cur}%." if cur is not None else "Could not determine current brightness.",
+        }
+
+    if action in ("wifi_status", "get_wifi", "check_wifi"):
+        st = wifi_status()
+        return {
+            "success": True,
+            "action": "wifi_status",
+            "value": st,
+            "message": st.get("message", "Wi-Fi status retrieved."),
+        }
+
+    if action in ("battery_status", "power_status", "get_battery"):
+        st = battery_status()
+        return {
+            "success": True,
+            "action": "battery_status",
+            "value": st,
+            "message": st.get("message", "Battery status retrieved."),
+        }
+
+    if action in ("bluetooth_status", "get_bluetooth", "check_bluetooth"):
+        st = bluetooth_status()
+        return {
+            "success": True,
+            "action": "bluetooth_status",
+            "value": st,
+            "message": st.get("message", "Bluetooth status retrieved."),
+        }
 
     if action in ("type_text", "write_on_screen", "type", "write"):
         text = str(value or params.get("text", "")).strip()
         if not text:
-            return "No text provided to type."
+            return {
+                "success": False,
+                "action": "type_text",
+                "value": None,
+                "message": "No text provided to type.",
+            }
         enter_after = str(params.get("press_enter", "false")).lower() in ("true", "1", "yes")
         type_text(text, press_enter_after=enter_after)
-        return f"Typed: {text[:80]}"
+        return {
+            "success": True,
+            "action": "type_text",
+            "value": text,
+            "message": f"Typed: {text[:80]}",
+        }
 
     if action == "press_key":
         key = str(value or params.get("key", "")).strip()
         if not key:
-            return "No key specified."
+            return {
+                "success": False,
+                "action": "press_key",
+                "value": None,
+                "message": "No key specified.",
+            }
         press_key(key)
-        return f"Pressed: {key}"
+        return {
+            "success": True,
+            "action": "press_key",
+            "value": key,
+            "message": f"Pressed: {key}",
+        }
 
     if action in ("reload_n", "refresh_n", "reload_page_n"):
         try:
-            reload_page_n(int(value or 1))
-            return f"Reloaded {value or 1} time(s)."
+            n = int(value or 1)
+            reload_page_n(n)
+            return {
+                "success": True,
+                "action": "reload_page_n",
+                "value": n,
+                "message": f"Reloaded {n} time(s).",
+            }
         except Exception as e:
-            return f"Reload failed: {e}"
+            return {
+                "success": False,
+                "action": "reload_page_n",
+                "value": None,
+                "message": f"Reload failed: {e}",
+            }
 
     if action == "scroll_up":
-        scroll_up(int(value or 500))
-        return "Scrolled up."
+        amt = int(value or 500)
+        scroll_up(amt)
+        return {
+            "success": True,
+            "action": "scroll_up",
+            "value": amt,
+            "message": "Scrolled up.",
+        }
 
     if action == "scroll_down":
-        scroll_down(int(value or 500))
-        return "Scrolled down."
+        amt = int(value or 500)
+        scroll_down(amt)
+        return {
+            "success": True,
+            "action": "scroll_down",
+            "value": amt,
+            "message": "Scrolled down.",
+        }
 
     func = ACTION_MAP.get(action)
     if not func:
-        return _suggest(raw_action or description)
+        return {
+            "success": False,
+            "action": action,
+            "value": None,
+            "message": _suggest(raw_action or description),
+        }
 
     # ── Capture "before" so the change can be taken back ─────────────────────
     # Read-then-write is the whole mechanism for settings: there is no clever
@@ -922,10 +1337,15 @@ def computer_settings(
         _before = ("brightness", brightness_get())
 
     try:
-        func()
+        res_val = func()
     except Exception as e:
         print(f"[Settings] Action failed ({action}): {e}")
-        return f"Action failed ({action}): {e}"
+        return {
+            "success": False,
+            "action": action,
+            "value": None,
+            "message": f"Action failed ({action}): {e}",
+        }
 
     if _before:
         kind, old = _before
@@ -941,32 +1361,35 @@ def computer_settings(
         push_undo("dark mode toggled",
                   lambda: (dark_mode(), "Theme switched back.")[1])
 
-    return f"Done: {action}."
+    val = res_val
+    if val is None:
+        if action in ("volume_up", "volume_down", "mute", "unmute", "toggle_mute"):
+            val = volume_get()
+        elif action in ("brightness_up", "brightness_down"):
+            val = brightness_get()
+
+    return {
+        "success": True,
+        "action": action,
+        "value": val,
+        "message": f"Done: {action}.",
+    }
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "computer_settings",
-    "description": "Controls the computer: volume, brightness, window management, keyboard shortcuts, typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control command. restart, shutdown and toggle_wifi put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Volume, brightness and dark mode can be reversed with the `undo` tool.",
+    "description": "Controls and inspects the computer: volume, brightness, battery/power status, Wi-Fi status, Bluetooth status, window management, keyboard shortcuts, typing text on screen, closing apps, fullscreen, dark mode, WiFi, restart, shutdown, scrolling, tab management, zoom, screenshots, lock screen, refresh/reload page. Use for ANY single computer control or settings query. restart, shutdown and toggle_wifi put a confirmation on the user's screen and do NOT happen until they press it — never claim they are done. Volume, brightness and dark mode can be reversed with the `undo` tool.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
-            # The exact vocabulary, spelled out.
-            #
-            # This used to say only "The action to perform", so the model
-            # usually filled `description` instead — and computer_settings then
-            # made a SECOND Gemini call, inside the tool, purely to translate
-            # that sentence into one of these names. Every "turn the volume
-            # down" cost two model round trips.
-            #
-            # Naming the actions here costs ~600 characters once per session and
-            # removes a whole round trip from every computer command.
             "action": {
                 "type": "STRING",
                 "description": (
                     "The exact action. Prefer this over `description` — pick one of: "
-                    "volume_up | volume_down | volume_set | mute | "
-                    "brightness_up | brightness_down | sleep_display | "
+                    "volume_up | volume_down | volume_set | volume_get | mute | "
+                    "brightness_up | brightness_down | brightness_get | sleep_display | "
+                    "battery_status | wifi_status | bluetooth_status | "
                     "pause_video | close_app | close_window | full_screen | "
                     "minimize | maximize | snap_left | snap_right | "
                     "switch_window | show_desktop | task_manager | focus_search | "
@@ -996,3 +1419,4 @@ TOOL = {
     },
     "handler": computer_settings,
 }
+

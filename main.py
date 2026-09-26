@@ -78,6 +78,11 @@ from memory.config_manager     import (
 from core.plugin_loader        import discover_plugins
 from core                      import undo as undo_stack
 from core                      import confirm as confirm_gate
+from core.permission_manager   import (
+    PermissionLevel, check_permission, verify_permission_gates, SecurityPolicyError,
+)
+from core.logger               import ActionLogger
+from agent.context             import AgentContext
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -146,7 +151,7 @@ def _pcm_level(samples) -> float:
 # F2 is high for spread vowels (/i/, /e/) and low for rounded ones (/u/, /o/).
 # Extra time beyond the device's reported output latency before the microphone
 # is trusted again: covers room decay and the speaker's own settling.
-_TAIL_MARGIN = 0.25
+_TAIL_MARGIN = 0.35
 
 _VIS_WIN = 1024        # ~43 ms analysis window at 24 kHz: enough for formants
 _VIS_HOP = 480         # 20 ms between frames, i.e. 50 shapes a second
@@ -599,6 +604,8 @@ class AgentLive:
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
+        self._action_in_flight     = False   # Command-execution lock: True while a tool/action is executing
+        self._action_cooldown_until = 0.0    # Monotonic time until post-action cooldown expires (absorbs app sounds)
         self._interrupted          = False   # True while draining audio after user interrupt
         # Transcript-driven mouth shapes for the avatar. Fed from the receive
         # loop as words arrive, drained by the playback loop against the audio.
@@ -626,11 +633,19 @@ class AgentLive:
         self.ui.ptt_hold          = self._on_ptt
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
+
+        # Validate configured Gemini models at startup (cached with 1-hr TTL)
+        try:
+            from core.gemini import validate_configured_models
+            threading.Thread(target=validate_configured_models, daemon=True, name="gemini-model-check").start()
+        except Exception:
+            pass
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
+        self._current_user_request = ""
 
         # ── Session resumption ─────────────────────────────────────────
         # The server issues a resumption handle every few seconds and reissues
@@ -670,6 +685,8 @@ class AgentLive:
             reserved_names=_inline_names,
             logger=lambda msg: print(f"[Actions] {msg}"),
         )
+        # Static source verification: ensure all CONFIRM/STRONG_CONFIRM tools have a confirm.request gate
+        verify_permission_gates(self._action_registry)
 
         # Plugins must not collide with either an inline tool or a discovered action.
         _core_names = _inline_names | self._action_registry.names()
@@ -707,6 +724,7 @@ class AgentLive:
         self._auth_challenge_phrase = ""
         self._session_authorized = False
         self._authorized_user = ""
+        self._greeted_this_session = False
 
         # Restore the saved push-to-talk preference. Doing it here rather than
         # in __init__ means the hotkey thread only exists once there is a
@@ -723,6 +741,7 @@ class AgentLive:
         self.ui.on_wake_manual   = self._ui_wake_manual   # () -> toggle awake/asleep
         self.ui.on_wake_install  = self._ui_wake_install  # () -> (ok, msg)
         self.ui.on_voice_auth_enroll = self._ui_voice_auth_enroll
+        AgentContext.get_instance().set_ui(self.ui)
 
     # ── Wake word: state machine ─────────────────────────────────────────────
 
@@ -1056,10 +1075,8 @@ class AgentLive:
             self._tail_until = 0.0
         else:
             # Hold the guard open across the device's own output latency plus a
-            # margin for the room. The microphone is NOT muted during it — the
-            # guard still lets a genuine reply through, so answering instantly
-            # still works. Only our own echo is dropped.
-            self._tail_until = time.monotonic() + self._out_latency + _TAIL_MARGIN
+            # cooldown margin to absorb trailing TTS echo and application sounds.
+            self._tail_until = time.monotonic() + max(self._out_latency + _TAIL_MARGIN, 0.40)
         if not value:
             # The echo history is deliberately NOT cleared here: the tail above
             # still needs it to recognise our own voice. It is dropped when the
@@ -1131,7 +1148,8 @@ class AgentLive:
         self._play_cursor = 0.0     # next batch starts a fresh timeline
         if self._turn_done_event:
             self._turn_done_event.clear()
-        self.ui.write_log("SYS: Interrupted — listening...")
+        if self._is_speaking:
+            self.ui.write_log("SYS: Interrupted — listening...")
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -1177,14 +1195,11 @@ class AgentLive:
         # Address form is a property of the language being spoken, so it is
         # stated as a principle rather than a two-language lookup — the model
         # already knows the respectful register of whatever language it is in.
-        _addr = (f"ADDRESS: Always call the user '{_user_name}'."
-                 if _user_name
-                 else 'ADDRESS: Address the user with the ordinary respectful form '
-                      'for a superior in the language you are currently speaking — '
-                      '"sir" in English, its everyday equivalent in any other '
-                      'language. Never an archaic or aristocratic form, and never '
-                      'the form from a different language than the one you are '
-                      'speaking in this sentence.')
+        _addr = (
+            'ADDRESS: Address the user in a generalized, respectful manner such as "Boss" or "Sir" '
+            '(or the ordinary respectful equivalent in whatever language you are speaking). '
+            'Never address the user by their personal name.'
+        )
         identity_ctx = (
             f"[IDENTITY]\n"
             f"Your name is {self._asst_name}. "
@@ -1313,30 +1328,33 @@ class AgentLive:
     async def _execute_tool(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
+        _act = str(args.get("action") or "").strip().lower()
+        perm_info = None
+        error_msg = None
+        resp_payload = None
 
         print(f"[AGENT] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
-
-        if name == "save_memory":
-            category = args.get("category", "notes")
-            key      = args.get("key", "")
-            value    = args.get("value", "")
-            if key and value:
-                update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
-            if not self.ui.muted:
-                self.ui.set_state("LISTENING")
-            return types.FunctionResponse(
-                id=fc.id, name=name,
-                response={"result": "ok", "silent": True}
-            )
-
         loop   = asyncio.get_event_loop()
         result = "Done."
+        self._action_in_flight = True
+        # WORKING = tool is actually executing (distinct from THINKING = model pondering)
+        if not self.ui.muted:
+            self.ui.set_state("WORKING")
 
         try:
-            if name == "recall_memory":
+            if name == "save_memory":
+                category = args.get("category", "notes")
+                key      = args.get("key", "")
+                value    = args.get("value", "")
+                if key and value:
+                    update_memory({category: {key: {"value": value}}})
+                    print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                result = "ok"
+                resp_payload = {"result": "ok", "silent": True}
+
+            elif name == "recall_memory":
                 # Local file search: no network, no second model. Kept out of
                 # the executor deliberately — it is a dictionary scan over a few
                 # hundred short strings, and a thread hop would cost more than
@@ -1375,6 +1393,28 @@ class AgentLive:
                         img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
                         print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
                         _stall = "screen"
+
+                    # Save captured frame to disk so subsequent file actions (copy, open, etc.) can access it
+                    try:
+                        _cap_dir = Path.cwd() / "data" / "captures"
+                        _cap_dir.mkdir(parents=True, exist_ok=True)
+                        _ext = ".jpg" if ("jpeg" in mime_t.lower() or "jpg" in mime_t.lower()) else ".png"
+                        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        _saved_path = _cap_dir / f"capture_{_ts}{_ext}"
+                        _saved_path.write_bytes(img_b)
+
+                        _root_last = Path.cwd() / f"last_capture{_ext}"
+                        _root_last.write_bytes(img_b)
+
+                        # Post-capture confirmation check
+                        if not _saved_path.exists() or _saved_path.stat().st_size == 0:
+                            raise IOError(f"Capture verification failed for {_saved_path}")
+
+                        self.ui.set_current_file(str(_saved_path.resolve()))
+                        print(f"[Vision] 💾 Saved capture to {_saved_path} & {_root_last}")
+                    except Exception as _e:
+                        print(f"[Vision] ⚠️ Could not save capture to disk: {_e}")
+
                     self._pending_vision = (img_b, mime_t, user_text, angle)
                     # The image is attached to this same exchange, so there is
                     # nothing to stall for and nothing to announce. Asking for an
@@ -1382,8 +1422,9 @@ class AgentLive:
                     # the model filled that turn by answering the question from
                     # imagination, then answered it again once it could see.
                     result = (
-                        f"[VISION_ACTIVE] {_stall.capitalize()} captured and attached to this "
-                        f"same exchange. Do not acknowledge and do not answer yet — the image "
+                        f"[VISION_ACTIVE] {_stall.capitalize()} captured and saved to "
+                        f"'{_root_last.name}' and '{_saved_path}'. "
+                        f"Attached to this same exchange. Do not acknowledge and do not answer yet — the image "
                         f"is arriving with this result. Reply once, from what you actually see "
                         f"in it."
                     )
@@ -1430,10 +1471,38 @@ class AgentLive:
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
-                _ctx = {"player": self.ui, "speak": self.speak,
-                        "response": None, "session_memory": None}
-                r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
-                result = r or "Done."
+
+                # file_controller: if referencing last capture or missing photo, resolve to current_file / last_capture
+                if name == "file_controller":
+                    _p = str(args.get("path") or "").strip().lower()
+                    if (_p in ("last_capture", "last_capture.jpg", "last_capture.png", "photo", "user_photo.png", "user_photo.jpg") or not args.get("path")) and self.ui.current_file:
+                        if not Path(_p).exists():
+                            args["path"] = self.ui.current_file
+
+                # open_app: if opening photo/capture/current file
+                if name == "open_app":
+                    _target = str(args.get("app_name") or "").strip().lower()
+                    if _target in ("photo", "photo.png", "photo.jpg", "user_photo.png", "user_photo.jpg", "last_capture", "capture", "captured_image", "captured_photo") and self.ui.current_file:
+                        args["app_name"] = self.ui.current_file
+                # Central permission evaluation before dispatch
+                _act = str(args.get("action") or "").strip().lower()
+                perm = check_permission(name, _act, args)
+                perm_info = {
+                    "level": perm.level.value if hasattr(perm.level, "value") else str(perm.level),
+                    "reason": perm.reason,
+                    "description": perm.description,
+                    "key": perm.key,
+                }
+                if perm.level == PermissionLevel.BLOCKED:
+                    print(f"[PERMISSION] 🚫 BLOCKED: {name}.{_act or 'default'} — {perm.reason}")
+                    result = f"[BLOCKED] Operation not permitted: {perm.reason}"
+                else:
+                    if perm.level in (PermissionLevel.CONFIRM, PermissionLevel.STRONG_CONFIRM):
+                        print(f"[PERMISSION] 🛡️ {perm.level.value}: {name}.{_act or 'default'} — {perm.reason}")
+                    _ctx = {"player": self.ui, "speak": self.speak,
+                            "response": None, "session_memory": None}
+                    r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
+                    result = r or "Done."
                 # web_search: mirror results to the on-screen content panel
                 if (name == "web_search" and r
                         and not r.startswith("No results")
@@ -1454,14 +1523,50 @@ class AgentLive:
                     result = f"Unknown tool: {name}"
 
         except Exception as e:
+            error_msg = str(e)
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
             self.speak_error(name, e)
+        finally:
+            self._action_in_flight = False
+            self._action_cooldown_until = time.monotonic() + 0.35
 
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
         print(f"[AGENT] 📤 {name} → {str(result)[:80]}")
+
+        # Observability / logs/ integration hook
+        try:
+            ActionLogger.log_event(
+                tool=name,
+                action=_act or None,
+                parameters=args,
+                permission=perm_info,
+                result=result,
+                error=error_msg,
+                user_request=getattr(self, "_current_user_request", None),
+            )
+        except Exception as _log_exc:
+            print(f"[ActionLogger] Hook error: {_log_exc}")
+
+        # Live Agent Context snapshot hook (Item 4 / Section 20)
+        try:
+            AgentContext.get_instance().update_tool_state(
+                tool=name,
+                action=_act or None,
+                parameters=args,
+                result=result,
+                error=error_msg,
+            )
+        except Exception as _ctx_exc:
+            print(f"[AgentContext] Hook error: {_ctx_exc}")
+
+        if resp_payload is not None:
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response=resp_payload,
+            )
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
@@ -1540,6 +1645,9 @@ class AgentLive:
                 det = self._wake_detector
                 if det is not None:
                     det.feed(indata)
+                return
+            # Discard any audio captured while an action (e.g. WhatsApp send, open_app) is executing or during post-action cooldown
+            if self._action_in_flight or (time.monotonic() < self._action_cooldown_until):
                 return
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
@@ -1762,6 +1870,7 @@ class AgentLive:
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
+                                self._current_user_request = full_in
                                 self._last_out_logged = ""   # new exchange
                                 self.ui.write_log(f"You: {full_in}")
                                 self._session_log.append(f"User: {full_in}")
@@ -2377,6 +2486,9 @@ class AgentLive:
                         self._awake = False
                         self.ui.set_state("SLEEPING")
                         self.ui.write_log("SYS: AGENT online — sleeping. Say 'Agent' to wake me.")
+                        if not getattr(self, "_greeted_this_session", False):
+                            self._greeted_this_session = True
+                            self.speak("Say exactly this one sentence and nothing else: I'm ready Boss, call out my name.")
                     else:
                         self._awake = True
                         self.ui.set_state("LISTENING")

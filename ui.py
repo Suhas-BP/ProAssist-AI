@@ -24,7 +24,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
-    QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
+    QFontDatabase, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath,
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 from PyQt6.QtWidgets import (
@@ -112,6 +112,7 @@ class C:
     ACC       = "#e8a33d"       # Warning amber
     ACC2      = "#e8a33d"       # Warning amber
     LOG_TAG   = "#5b9dff"       # Log tag blue
+    BLUE      = "#3b82f6"       # Working state blue
 
     # Danger / Interrupt
     RED           = "#e05a5a"
@@ -667,7 +668,7 @@ class HudCanvas(QWidget):
         # either way because the animation state keeps stepping at 60 Hz.
         self._paint_tick = (self._paint_tick + 1) % 6
         active = (self.speaking or amp > 0.02
-                  or self.state in ("THINKING", "PROCESSING"))
+                  or self.state in ("THINKING", "PROCESSING", "WORKING"))
         if _blinked or (self._paint_tick % 2 == 0 if active
                         else self._paint_tick % 3 == 0):
             # Nothing is on screen when the window is hidden or minimised, so
@@ -702,6 +703,8 @@ class HudCanvas(QWidget):
             return qcol(C.PRI), qcol(C.ACC)
         if self.state in ("THINKING", "PROCESSING"):
             return qcol(C.PRI), qcol(C.ACC2)
+        if self.state == "WORKING":
+            return qcol(C.PRI), qcol(C.BLUE)
         if self.state == "LISTENING":
             return qcol(C.PRI), qcol(C.GREEN)
         return qcol(C.PRI), qcol(C.PRI_DIM)
@@ -798,7 +801,7 @@ class HudCanvas(QWidget):
         # 6. Sweeping arcs. Long spans, not dashes — the original's grandeur
         #    came from a few big strokes. Speed is the state: idle drifts,
         #    thinking hurries, speaking runs.
-        rate = 1.0 + (1.9 if self.state in ("THINKING", "PROCESSING") else 0.0) \
+        rate = 1.0 + (1.9 if self.state in ("THINKING", "PROCESSING", "WORKING") else 0.0) \
                    + (1.2 if self.speaking else 0.0)
         for k, (rr, span, count, dirn, col, a, wid) in enumerate((
                 (0.955, 118, 2, +1, acc,  0.75, 2.0),
@@ -888,6 +891,8 @@ class HudCanvas(QWidget):
                     _acc = qcol(C.ACC)
                 elif self.state in ("THINKING", "PROCESSING"):
                     _acc = qcol(C.ACC2)
+                elif self.state == "WORKING":
+                    _acc = qcol(C.BLUE)
                 elif self.state == "LISTENING":
                     _acc = qcol(C.GREEN)
                 else:
@@ -915,6 +920,9 @@ class HudCanvas(QWidget):
             elif self.state == "PROCESSING":
                 sym = "▷" if self._blink else "▶"
                 txt, col = f"{sym}  PROCESSING", qcol(C.ACC2)
+            elif self.state == "WORKING":
+                sym = "⚙" if self._blink else "⚙"
+                txt, col = f"{sym}  WORKING",    qcol(C.BLUE)
             elif self.state == "LISTENING":
                 sym = "●" if self._blink else "○"
                 txt, col = f"{sym}  LISTENING",  qcol(C.GREEN)
@@ -1177,9 +1185,18 @@ class FileDropZone(QWidget):
         self._dash_offset = (self._dash_offset + 0.8) % 16
         self._canvas.update()
 
+    @property
+    def current_file(self) -> str | None:
+        return self._current_file
+
     def set_file(self, path: str | None):
         self._current_file = path
         self._canvas.update()
+
+    def clear_file(self):
+        self._current_file = None
+        self._canvas.update()
+        self.file_selected.emit("")
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -1216,8 +1233,7 @@ class FileDropZone(QWidget):
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             if self._current_file and e.pos().x() > self.width() - 34:
-                self._current_file = None
-                self._canvas.update()
+                self.clear_file()
                 return
             self._browse()
 
@@ -3259,7 +3275,10 @@ class RemoteKeyOverlay(QWidget):
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             buf = BytesIO()
-            img.save(buf, format="PNG")
+            try:
+                img.save(buf, format="PNG")
+            except TypeError:
+                img.save(buf)
             px = QPixmap()
             px.loadFromData(buf.getvalue())
             self._qr_label.setPixmap(
@@ -5242,9 +5261,16 @@ class MainWindow(QMainWindow):
         return w
 
     def _on_file_selected(self, path: str):
+        if not path:
+            self._current_file = None
+            if hasattr(self, '_file_hint') and self._file_hint:
+                self._file_hint.hide()
+            return
         self._current_file = path
-        p    = Path(path)
-        cat  = _file_category(p)
+        p = Path(path)
+        if not p.exists():
+            return
+        cat = _file_category(p)
         icon, _ = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
         size = _fmt_size(p.stat().st_size)
         if hasattr(self, '_file_hint') and self._file_hint:
@@ -5970,6 +5996,7 @@ class MainWindow(QMainWindow):
                 "LISTENING": "Listening — speak now",
                 "THINKING":  "Thinking…",
                 "PROCESSING":"Processing…",
+                "WORKING":   "Working on task…",
                 "SPEAKING":  "Speaking…",
                 "MUTED":     "Microphone muted",
                 "SLEEPING":  f'Sleeping — say "{self._assistant_name.capitalize()}" to wake',
@@ -6046,7 +6073,23 @@ class AgentUI:
 
     @property
     def current_file(self) -> str | None:
-        return self._win._drop_zone.current_file()
+        if hasattr(self._win, "_drop_zone") and self._win._drop_zone is not None:
+            val = getattr(self._win._drop_zone, "current_file", None)
+            if callable(val):
+                return val()
+            return val
+        return getattr(self._win, "_current_file", None)
+
+    def set_current_file(self, path: str | None):
+        if hasattr(self._win, "_drop_zone") and self._win._drop_zone is not None:
+            if hasattr(self._win._drop_zone, "set_file"):
+                self._win._drop_zone.set_file(path)
+            else:
+                self._win._drop_zone._current_file = path
+        self._win._current_file = path
+
+    def clear_file(self):
+        self.set_current_file(None)
 
     @property
     def on_text_command(self):

@@ -45,7 +45,7 @@ WAKE_WORD_ENGINE = "whisper_keyword"
 WAKE_PHRASE = "agent"
 
 # OpenWakeWord specific settings
-OPENWAKEWORD_MODEL_NAME = "hey_jarvis"   # "hey_jarvis" or path to custom "models/hey_agent.onnx"
+OPENWAKEWORD_MODEL_NAME = "Agent"   # "hey_jarvis" or path to custom "models/hey_agent.onnx"
 OPENWAKEWORD_THRESHOLD = 0.5            # Activation confidence threshold (0.0 to 1.0)
 
 # Local Whisper keyword spotter settings
@@ -63,8 +63,8 @@ KEYWORD_SPOT_ENERGY_THRESHOLD = 0.0055   # Calibrated speech gate for clear voic
 # Calibrated for ResNet34 ONNX embedding with Kaldi 80-bin fbank:
 # - Same speaker typical score: 0.82 to 0.90
 # - Different speaker typical score: 0.15 to 0.35
-# Configured threshold 0.50 provides reliable speaker authentication.
-VOICE_SIMILARITY_THRESHOLD = 0.50
+# Configured threshold 0.45 provides reliable speaker authentication.
+VOICE_SIMILARITY_THRESHOLD = 0.45
 
 # Audio duration to capture right after wake word is detected.
 # 4.0s gives the ResNet34 backbone more frames → better embedding quality.
@@ -98,7 +98,7 @@ ENABLE_LIVENESS = True
 
 LIVENESS_RECORD_DURATION = 5.0          # Seconds to wait for challenge phrase (longer = more audio = better embedding)
 LIVENESS_TEXT_ACCURACY_THRESHOLD = 0.50 # Minimum word-matching ratio (relaxed to handle accent/pace variation)
-LIVENESS_SIMILARITY_THRESHOLD = 0.50    # Voice similarity required — matches VOICE_SIMILARITY_THRESHOLD
+LIVENESS_SIMILARITY_THRESHOLD = 0.45    # Voice similarity required — matches VOICE_SIMILARITY_THRESHOLD
 
 
 # =====================================================================

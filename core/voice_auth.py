@@ -1,3 +1,4 @@
+
 """Local primary-user voice enrollment and speaker verification.
 
 Wake-word detection only starts this verification step. Authorization requires
@@ -19,7 +20,7 @@ SAMPLE_RATE = 16_000
 # the user finishes. Capture is still local and fixed-length for stable VAD.
 SAMPLE_SECONDS = 6
 SAMPLES_REQUIRED = 3
-MATCH_THRESHOLD = 0.72
+MATCH_THRESHOLD = 0.45
 REGISTRATION_SENTENCES = (
     "Hello, I’m your voice assistant. Please remember my voice for secure authentication.",
     "I am registering my voice with Pro-Assist AI for secure authentication.",

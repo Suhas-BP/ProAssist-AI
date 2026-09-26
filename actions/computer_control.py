@@ -1,11 +1,22 @@
 #computer_control.py
+import sys
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import io
 import json
 import platform
 import re
 import string
 import subprocess
-import sys
 
 if platform.system() == "Windows":
     _WIN_HIDE: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
@@ -59,20 +70,25 @@ def _get_api_key() -> str:
 
 _SAFE_SCREENSHOT_ROOTS = (
     Path.home(),
+    Path.cwd(),
 )
 
 def _safe_screenshot_path(requested: str | None) -> Path:
-    fallback = Path.home() / "Desktop" / "jarvis_screenshot.png"
+    fallback = Path.home() / "Pictures" / "screenshot.png"
+    if not fallback.parent.exists():
+        fallback = Path.home() / "Desktop" / "screenshot.png"
     if not requested:
+        fallback.parent.mkdir(parents=True, exist_ok=True)
         return fallback
     try:
         p = Path(requested).expanduser().resolve()
         for root in _SAFE_SCREENSHOT_ROOTS:
-            if p.is_relative_to(root.resolve()):
+            if p.resolve() == root.resolve() or p.resolve().is_relative_to(root.resolve()):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 return p
     except Exception:
         pass
+    fallback.parent.mkdir(parents=True, exist_ok=True)
     return fallback
 
 def _require_pyautogui():
@@ -178,13 +194,17 @@ def _smart_type(text: str, clear_first: bool = True) -> str:
     return f"Smart-typed: {text[:60]}{'…' if len(text) > 60 else ''}"
 
 
-def _click(x=None, y=None, button: str = "left", clicks: int = 1) -> str:
+def _click(x=None, y=None, button: str = "left", clicks: int = 1, interaction: str = "single") -> str:
     _require_pyautogui()
+    if interaction == "double" or clicks == 2:
+        clicks = 2
+    else:
+        clicks = 1
     if x is not None and y is not None:
         pyautogui.click(x, y, button=button, clicks=clicks)
         return f"{'Double-c' if clicks == 2 else 'C'}licked ({x}, {y}) [{button}]"
     pyautogui.click(button=button, clicks=clicks)
-    return f"Clicked at current position [{button}]"
+    return f"{'Double-c' if clicks == 2 else 'C'}licked at current position [{button}]"
 
 
 def _hotkey(*keys) -> str:
@@ -242,6 +262,7 @@ def _clipboard_paste(text: str) -> str:
 def _screenshot(save_path: str | None = None) -> str:
     _require_pyautogui()
     path = _safe_screenshot_path(save_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     img  = pyautogui.screenshot()
     img.save(str(path))
     return f"Screenshot saved: {path}"
@@ -310,7 +331,7 @@ def _focus_window(title: str) -> str:
 
     return f"focus_window: unknown OS '{os_name}'"
 
-def _screen_find(description: str) -> tuple[int, int] | None:
+def _screen_find(description: str) -> tuple[int, int, str] | None:
     api_key = _get_api_key()
     if not api_key:
         print("[ComputerControl] ⚠️ No API key for screen_find")
@@ -321,16 +342,24 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         from google.genai import types as gtypes
 
         _require_pyautogui()
-        w, h  = pyautogui.size()
-        img   = pyautogui.screenshot()
-        buf   = io.BytesIO()
+        screen_w, screen_h = pyautogui.size()
+        img = pyautogui.screenshot()
+        img_w, img_h = img.size
+        buf = io.BytesIO()
         img.save(buf, format="PNG")
         image_bytes = buf.getvalue()
 
         prompt = (
-            f"This is a screenshot of a {w}×{h} pixel screen. "
-            f"Locate the UI element described as: '{description}'. "
-            f"Reply with ONLY the center coordinates as: x,y "
+            f"This is a screenshot of the user's screen ({img_w}×{img_h} physical pixels).\n"
+            f"Locate the UI element described as: '{description}'.\n"
+            f"Also determine the appropriate mouse interaction type based on visual context:\n"
+            f"- If the target is a list item, table row, playlist entry, song/track, file icon, or folder icon meant to be opened/activated: interaction is 'double'\n"
+            f"- If the target is a button, menu item, tab, toggle, checkbox, hyperlink, or single control: interaction is 'single'\n"
+            f"- If ambiguous, default to 'single'\n\n"
+            f"Reply in EXACTLY this format:\n"
+            f"COORDINATES: x,y\n"
+            f"INTERACTION: single|double\n"
+            f"Where x,y are normalized coordinates from 0 to 1000 (0,0 is top-left, 1000,1000 is bottom-right).\n"
             f"If the element is not visible, reply: NOT_FOUND"
         )
 
@@ -346,14 +375,143 @@ def _screen_find(description: str) -> tuple[int, int] | None:
         if "NOT_FOUND" in text.upper():
             return None
 
-        match = re.search(r"(\d+)\s*,\s*(\d+)", text)
-        if match:
-            return int(match.group(1)), int(match.group(2))
+        coord_match = re.search(r"COORDINATES:\s*(\d+)\s*,\s*(\d+)", text, re.IGNORECASE)
+        if not coord_match:
+            coord_match = re.search(r"(\d+)\s*,\s*(\d+)", text)
+
+        if not coord_match:
+            return None
+
+        raw_x, raw_y = int(coord_match.group(1)), int(coord_match.group(2))
+
+        interaction = "single"
+        inter_match = re.search(r"INTERACTION:\s*(single|double)", text, re.IGNORECASE)
+        if inter_match:
+            interaction = inter_match.group(1).lower()
+
+        # Coordinate conversion with DPI scaling awareness:
+        # If coordinates are normalized in 0..1000 range:
+        if raw_x <= 1000 and raw_y <= 1000 and (img_w > 1000 or img_h > 1000):
+            target_x = int(raw_x / 1000.0 * screen_w)
+            target_y = int(raw_y / 1000.0 * screen_h)
+        else:
+            # Fallback if coordinates were returned in physical image pixel space:
+            target_x = int(raw_x * (screen_w / img_w))
+            target_y = int(raw_y * (screen_h / img_h))
+
+        return target_x, target_y, interaction
 
     except Exception as e:
         print(f"[ComputerControl] ⚠️ screen_find failed: {e}")
 
     return None
+
+
+# ── Closed-Loop Action Retry & Error Recovery (Item 3 / Section 22) ───────────
+
+class ActionExecutionError(Exception):
+    def __init__(self, failure_type: str, message: str, attempts: int = 1):
+        super().__init__(message)
+        self.failure_type = failure_type
+        self.message = message
+        self.attempts = attempts
+
+
+def _verify_coordinates(x: int | None, y: int | None) -> None:
+    """Pre-verification: Ensure target coordinates fall strictly within physical screen bounds."""
+    if x is None and y is None:
+        return
+    _require_pyautogui()
+    screen_w, screen_h = pyautogui.size()
+    if (x is not None and (x < 0 or x > screen_w)) or (y is not None and (y < 0 or y > screen_h)):
+        raise ActionExecutionError(
+            "COORDINATES_OUT_OF_BOUNDS",
+            f"[FAILURE:COORDINATES_OUT_OF_BOUNDS] Coordinates ({x}, {y}) exceed display bounds ({screen_w}x{screen_h}). Action aborted without blind execution."
+        )
+
+
+def _retry_action(
+    action_name: str,
+    action_fn,
+    pre_verify_fn=None,
+    re_verify_fn=None,
+    max_retries: int = 2,
+    initial_backoff: float = 0.3,
+    backoff_multiplier: float = 2.0,
+) -> str:
+    """
+    Closed-loop retry wrapper for computer control actions:
+    1. Pre-verifies state before execution.
+    2. Catches transient errors/failures, re-verifies state, and retries up to max_retries with backoff.
+    3. Produces explicit diagnostic classification upon failure exhaustion.
+    """
+    backoff = initial_backoff
+    last_error: str = ""
+    attempts = 0
+
+    for attempt in range(1 + max_retries):
+        attempts += 1
+        try:
+            if attempt == 0:
+                if pre_verify_fn:
+                    pre_verify_fn()
+            else:
+                if re_verify_fn:
+                    re_verify_fn()
+
+            result = action_fn()
+            if isinstance(result, str):
+                if result.startswith("Element not found on screen"):
+                    raise ActionExecutionError("ELEMENT_NOT_FOUND", result, attempts=attempts)
+                if "focus_window" in result and "failed" in result.lower():
+                    raise ActionExecutionError("WINDOW_FOCUS", result, attempts=attempts)
+            return result
+
+        except ActionExecutionError as e:
+            if e.failure_type == "COORDINATES_OUT_OF_BOUNDS":
+                print(f"[ComputerControl] 🚫 Bounds check failed: {e.message}")
+                return e.message
+            last_error = e.message
+        except Exception as e:
+            err_str = str(e)
+            if "FailSafe" in type(e).__name__ or "failsafe" in err_str.lower():
+                last_error = f"[FAILURE:INPUT_DRIVER] PyAutoGUI action '{action_name}' failed: FailSafeException (cursor in corner)."
+            else:
+                last_error = f"[FAILURE:INPUT_DRIVER] Action '{action_name}' execution error: {e}"
+
+        if attempt < max_retries:
+            print(f"[ComputerControl] ⚠️ Attempt {attempts} failed for '{action_name}'; retrying in {backoff:.2f}s... ({last_error})")
+            time.sleep(backoff)
+            backoff *= backoff_multiplier
+
+    # Max retries exhausted: Explicit failure classification
+    _screen_w, _screen_h = ("unknown", "unknown")
+    try:
+        if _PYAUTOGUI:
+            _screen_w, _screen_h = pyautogui.size()
+    except Exception:
+        pass
+
+    if "ELEMENT_NOT_FOUND" in last_error or "not found" in last_error.lower():
+        report = (
+            f"[FAILURE:ELEMENT_NOT_FOUND] Could not locate target on screen after {max_retries} retries "
+            f"(total {attempts} attempts, backoffs 0.30s, 0.60s). "
+            f"Display resolution: {_screen_w}x{_screen_h}. "
+            f"Suggestions: Verify the target window is in the foreground and the element is not scrolled out of view."
+        )
+    elif "WINDOW_FOCUS" in last_error or "focus" in last_error.lower():
+        report = (
+            f"[FAILURE:WINDOW_FOCUS] Window focus failed after {max_retries} retries "
+            f"(total {attempts} attempts). Target window could not be activated."
+        )
+    elif "INPUT_DRIVER" in last_error:
+        report = last_error
+    else:
+        report = f"[FAILURE:ACTION_FAILED] Action '{action_name}' failed after {max_retries} retries (total {attempts} attempts): {last_error}"
+
+    print(f"[ComputerControl] ❌ Exhausted retries: {report}")
+    return report
+
 
 def computer_control(
     parameters: dict,
@@ -417,39 +575,95 @@ def computer_control(
     try:
 
         if action == "type":
-            return _type(params.get("text", ""))
+            title = params.get("title")
+            return _retry_action(
+                "type",
+                lambda: _type(params.get("text", "")),
+                re_verify_fn=lambda: _focus_window(title) if title else None,
+            )
 
         if action == "smart_type":
-            return _smart_type(
-                params.get("text", ""),
-                clear_first=params.get("clear_first", True),
+            title = params.get("title")
+            return _retry_action(
+                "smart_type",
+                lambda: _smart_type(
+                    params.get("text", ""),
+                    clear_first=params.get("clear_first", True),
+                ),
+                re_verify_fn=lambda: _focus_window(title) if title else None,
             )
 
         if action in ("click", "left_click"):
-            return _click(params.get("x"), params.get("y"), "left", 1)
+            interaction = params.get("interaction", "single")
+            clicks = 2 if interaction == "double" or params.get("clicks") == 2 else 1
+            x = params.get("x")
+            y = params.get("y")
+            title = params.get("title")
+            return _retry_action(
+                "click",
+                lambda: _click(x, y, "left", clicks=clicks, interaction=interaction),
+                pre_verify_fn=lambda: _verify_coordinates(x, y),
+                re_verify_fn=lambda: _focus_window(title) if title else None,
+            )
 
         if action == "double_click":
-            return _click(params.get("x"), params.get("y"), "left", 2)
+            x = params.get("x")
+            y = params.get("y")
+            title = params.get("title")
+            return _retry_action(
+                "double_click",
+                lambda: _click(x, y, "left", clicks=2, interaction="double"),
+                pre_verify_fn=lambda: _verify_coordinates(x, y),
+                re_verify_fn=lambda: _focus_window(title) if title else None,
+            )
 
         if action == "right_click":
-            return _click(params.get("x"), params.get("y"), "right", 1)
+            x = params.get("x")
+            y = params.get("y")
+            title = params.get("title")
+            return _retry_action(
+                "right_click",
+                lambda: _click(x, y, "right", 1),
+                pre_verify_fn=lambda: _verify_coordinates(x, y),
+                re_verify_fn=lambda: _focus_window(title) if title else None,
+            )
 
         if action == "move":
-            return _move(int(params.get("x", 0)), int(params.get("y", 0)))
+            x = int(params.get("x", 0))
+            y = int(params.get("y", 0))
+            return _retry_action(
+                "move",
+                lambda: _move(x, y),
+                pre_verify_fn=lambda: _verify_coordinates(x, y),
+            )
 
         if action == "drag":
-            return _drag(
-                int(params.get("x1", 0)), int(params.get("y1", 0)),
-                int(params.get("x2", 0)), int(params.get("y2", 0)),
+            x1 = int(params.get("x1", 0))
+            y1 = int(params.get("y1", 0))
+            x2 = int(params.get("x2", 0))
+            y2 = int(params.get("y2", 0))
+            def _verify_drag_bounds():
+                _verify_coordinates(x1, y1)
+                _verify_coordinates(x2, y2)
+            return _retry_action(
+                "drag",
+                lambda: _drag(x1, y1, x2, y2),
+                pre_verify_fn=_verify_drag_bounds,
             )
 
         if action == "hotkey":
             raw  = params.get("keys", "")
             keys = [k.strip() for k in raw.split("+")] if isinstance(raw, str) else raw
-            return _hotkey(*keys)
+            return _retry_action(
+                "hotkey",
+                lambda: _hotkey(*keys),
+            )
 
         if action == "press":
-            return _press(params.get("key", "enter"))
+            return _retry_action(
+                "press",
+                lambda: _press(params.get("key", "enter")),
+            )
 
         if action == "scroll":
             return _scroll(
@@ -467,17 +681,42 @@ def computer_control(
             return _screenshot(params.get("path"))
 
         if action == "screen_find":
-            coords = _screen_find(params.get("description", ""))
-            return f"{coords[0]},{coords[1]}" if coords else "NOT_FOUND"
+            result = _screen_find(params.get("description", ""))
+            if result:
+                x, y, interaction = result
+                return f"{x},{y},{interaction}"
+            return "NOT_FOUND"
 
         if action == "screen_click":
-            desc   = params.get("description", "")
-            coords = _screen_find(desc)
-            if coords:
+            desc = params.get("description", "")
+            title = params.get("title")
+
+            def _do_screen_click():
+                result = _screen_find(desc)
+                if not result:
+                    raise ActionExecutionError(
+                        "ELEMENT_NOT_FOUND",
+                        f"Element not found on screen: '{desc}'"
+                    )
+                x, y, interaction = result
+                # User/caller override if explicitly specified in params
+                interaction = params.get("interaction") or interaction
                 time.sleep(0.2)
-                _click(x=coords[0], y=coords[1])
-                return f"Clicked '{desc}' at {coords}"
-            return f"Element not found on screen: '{desc}'"
+                click_msg = _click(x=x, y=y, interaction=interaction)
+                return f"{click_msg} on '{desc}' (interaction: {interaction})"
+
+            def _re_verify_screen():
+                if title:
+                    _focus_window(title)
+                    time.sleep(0.2)
+
+            return _retry_action(
+                "screen_click",
+                _do_screen_click,
+                re_verify_fn=_re_verify_screen,
+                max_retries=2,
+                initial_backoff=0.3,
+            )
 
         if action == "wait":
             secs = float(params.get("seconds", 1.0))
@@ -486,10 +725,17 @@ def computer_control(
             return f"Waited {secs}s"
 
         if action == "clear_field":
-            return _clear_field()
+            return _retry_action(
+                "clear_field",
+                _clear_field,
+            )
 
         if action == "focus_window":
-            return _focus_window(params.get("title", ""))
+            title = params.get("title", "")
+            return _retry_action(
+                "focus_window",
+                lambda: _focus_window(title),
+            )
 
         if action == "random_data":
             dt     = params.get("type", "name")

@@ -115,20 +115,21 @@ VISION = "vision"  # uploaded images — REST first; Live can return empty turns
 LIVE = "live"
 
 _LADDERS = {
-    FAST: (LIVE, "gemini-2.5-flash-lite", "gemini-2.5-flash"),
-    SMART: (LIVE, "gemini-2.5-flash", "gemini-2.5-flash-lite"),
+    FAST: (LIVE, "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-flash-lite-latest"),
+    SMART: (LIVE, "gemini-3.6-flash", "gemini-2.5-pro", "gemini-3.1-flash-lite"),
     # Grounded search needs response.candidates[...].grounding_metadata, which a
     # Live turn does not produce. REST only, and it says so rather than silently
     # returning an answer with no sources behind it.
-    SEARCH: ("gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"),
+    SEARCH: ("gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest"),
     # Uploaded images must use the REST multimodal endpoint first. The
     # throwaway Live endpoint can accept an image but occasionally completes
     # with no output transcription, which looks like a failed description.
     VISION: (
+        "gemini-3.6-flash",
         "gemini-3-flash-preview",
         "gemini-2.5-pro",
         "gemini-3.1-flash-lite",
-        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
     ),
 }
 
@@ -188,17 +189,19 @@ _cooldown: dict[str, float] = {}
 _cool_lock = threading.Lock()
 
 
-def _cool(model: str) -> None:
+def _cool(model: str, scope: str = "") -> None:
+    key = f"{scope}:{model}" if scope else model
     with _cool_lock:
-        _cooldown[model] = time.monotonic() + _COOLDOWN_SECONDS
+        _cooldown[key] = time.monotonic() + _COOLDOWN_SECONDS
 
 
-def _cooling(model: str) -> bool:
+def _cooling(model: str, scope: str = "") -> bool:
+    key = f"{scope}:{model}" if scope else model
     with _cool_lock:
-        until = _cooldown.get(model, 0.0)
+        until = _cooldown.get(key, 0.0)
         if until and time.monotonic() < until:
             return True
-        _cooldown.pop(model, None)
+        _cooldown.pop(key, None)
         return False
 
 
@@ -214,6 +217,54 @@ def api_key(refresh: bool = False) -> str:
         except Exception:
             _cached_key = ""
         return _cached_key
+
+
+_validated_models_cache: set[str] = set()
+_validation_lock = threading.Lock()
+_last_validation_time = 0.0
+_VALIDATION_TTL_SEC = 3600.0  # 1 hour cache TTL
+
+
+def validate_configured_models(key: str = "") -> bool:
+    """
+    Validates configured Gemini model ladder against live API's available models list.
+    Caches results with a 1-hour TTL and emits clear warnings for any retired/missing model.
+    """
+    global _last_validation_time, _validated_models_cache
+    with _validation_lock:
+        now = time.monotonic()
+        if _validated_models_cache and (now - _last_validation_time < _VALIDATION_TTL_SEC):
+            return True
+
+        k = key or api_key()
+        if not k:
+            print("[Gemini] [WARN] Cannot validate models: no API key configured.")
+            return False
+
+        try:
+            from google import genai
+            cl = genai.Client(api_key=k)
+            available_raw = {m.name for m in cl.models.list()}
+            available = {m.split("models/")[-1] for m in available_raw} | available_raw
+            _validated_models_cache = available
+            _last_validation_time = now
+
+            all_ladder_models = set()
+            for rungs in _LADDERS.values():
+                for rung in rungs:
+                    if rung != LIVE:
+                        all_ladder_models.add(rung)
+
+            invalid_models = [m for m in all_ladder_models if m not in available and f"models/{m}" not in available_raw]
+            if invalid_models:
+                print(f"[Gemini] [WARN] Configured ladder model(s) not in live API list: {invalid_models}")
+                return False
+            else:
+                print(f"[Gemini] [OK] Configured Gemini models validated against live API ({len(all_ladder_models)} models OK).")
+                return True
+        except Exception as e:
+            print(f"[Gemini] [WARN] Model validation warning: {e}")
+            return False
 
 
 def client(timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = ""):
@@ -413,8 +464,17 @@ def call(contents, tier: str = FAST, config=None,
         print("[Gemini] no Gemini API key is configured")
         return None
 
+    is_grounded = config is not None and (
+        ("tools" in config if isinstance(config, dict) else hasattr(config, "tools"))
+    )
+    scope = "grounded" if is_grounded else ""
+
     cl = None
-    tried = [m for m in ladder if not _cooling(m)] or list(ladder)
+    tried = [m for m in ladder if not _cooling(m, scope)]
+    if not tried:
+        print(f"[Gemini] All models on ladder '{tier}' (scope: {scope or 'default'}) are cooling — skipping API calls.")
+        return None
+
     for model in tried:
         try:
             if model == LIVE:
@@ -431,8 +491,8 @@ def call(contents, tier: str = FAST, config=None,
         except Exception as e:
             msg = str(e)
             if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                _cool(model)
-                print(f"[Gemini] {model}: out of quota — skipping it for "
+                _cool(model, scope)
+                print(f"[Gemini] {model} ({scope or 'default'}): out of quota — skipping it for "
                       f"{_COOLDOWN_SECONDS // 60} minutes")
             else:
                 print(f"[Gemini] {model}: {type(e).__name__}: {msg[:140]}")

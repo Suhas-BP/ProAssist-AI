@@ -51,6 +51,8 @@ desktop.ini
 
 # ── Runtime output ────────────────────────────────────────────────────────────
 *.log
-logs/
+logs/*.log
+logs/*.jsonl
+!logs/.gitkeep
 downloads/
 screenshots/

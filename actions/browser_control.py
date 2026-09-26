@@ -12,14 +12,121 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
+import re
+from urllib.parse import urlparse
+
 from playwright.async_api import (
     async_playwright,
     BrowserContext,
+    Download,
     Page,
     Playwright,
     TimeoutError as PlaywrightTimeout,
 )
 _OS = platform.system()   # "Windows" | "Darwin" | "Linux"
+
+# ── Sensitive Action Detection Patterns ───────────────────────────────────────
+CHECKOUT_URL_PATTERN = re.compile(
+    r'(checkout|cart|payment|pay\b|billing|order-review|place-order|subscribe|purchase|stripe\.com|paypal\.com)',
+    re.IGNORECASE
+)
+
+MESSAGING_URL_PATTERN = re.compile(
+    r'(mail\.google\.com|outlook\.live\.com|mail\.yahoo\.com|mail\.|/compose|/webmail|twitter\.com|x\.com|linkedin\.com|facebook\.com|reddit\.com|slack\.com|discord\.com|whatsapp\.com|telegram\.org)',
+    re.IGNORECASE
+)
+
+PURCHASE_TEXT_PATTERN = re.compile(
+    r'\b(buy\s+now|place\s+(?:your\s+)?order|pay\s+now|pay\s+[\$€£]|make\s+payment|confirm\s+payment|submit\s+payment|complete\s+(?:order|purchase|checkout)|purchase\s+now|authorize\s+payment|place\s+order\s+now|order\s+now)\b',
+    re.IGNORECASE
+)
+
+PURCHASE_CHECKOUT_TEXT_PATTERN = re.compile(
+    r'\b(confirm|place\s+order|pay|submit(?:\s+order|\s+payment)?|complete|checkout|continue\s+to\s+payment|proceed\s+to\s+payment)\b',
+    re.IGNORECASE
+)
+
+MESSAGING_TEXT_PATTERN = re.compile(
+    r'\b(send\s+(?:message|email|mail|sms|chat|now)|submit\s+post|post\s+(?:comment|message|tweet|status|update)|publish\s+(?:post|article|now)|tweet|retweet|share\s+post)\b',
+    re.IGNORECASE
+)
+
+MESSAGING_CONTEXT_BUTTON_PATTERN = re.compile(
+    r'^(send|post|publish|tweet|reply|share)$|\b(send|post|publish|tweet|reply)\b',
+    re.IGNORECASE
+)
+
+ACCOUNT_TEXT_PATTERN = re.compile(
+    r'\b(delete\s+(?:my\s+)?account|close\s+(?:my\s+)?account|terminate\s+(?:my\s+)?membership|cancel\s+(?:my\s+)?subscription|reset\s+account|transfer\s+funds|wire\s+transfer)\b',
+    re.IGNORECASE
+)
+
+def _detect_sensitive_action(
+    url: str,
+    action: str,
+    target_text: str = "",
+    selector: str = "",
+) -> tuple[bool, str, str]:
+    """
+    Detect whether a consequential browser action (click/smart_click/fill_form/press)
+    matches sensitive categories:
+      1. Financial / Purchase / Payment
+      2. Messaging / Email / Public Posting
+      3. Account Deletion / Critical Security Modification
+
+    Returns:
+      (is_sensitive: bool, category: str, explanation: str)
+    """
+    if action not in ("click", "smart_click", "press", "fill_form"):
+        return False, "", ""
+
+    comb = f"{target_text} {selector}".strip().lower()
+    parsed = urlparse(url)
+    domain = parsed.netloc or (parsed.path.split("/")[0] if parsed.path else "current page")
+    is_checkout_url = bool(CHECKOUT_URL_PATTERN.search(url))
+    is_messaging_url = bool(MESSAGING_URL_PATTERN.search(url))
+
+    # 1. Purchase / Payment
+    if PURCHASE_TEXT_PATTERN.search(comb):
+        return (
+            True,
+            "Purchase / Payment",
+            f"This appears to be a purchase or payment transaction on {domain} (target: '{target_text or selector}').",
+        )
+
+    if is_checkout_url and PURCHASE_CHECKOUT_TEXT_PATTERN.search(comb):
+        return (
+            True,
+            "Purchase / Payment",
+            f"This appears to be a purchase or payment confirmation on checkout page {domain} (target: '{target_text or selector}').",
+        )
+
+    # 2. Messaging / Public Posting
+    if MESSAGING_TEXT_PATTERN.search(comb):
+        return (
+            True,
+            "Send Message / Post Publicly",
+            f"This appears to send a message or post content on {domain} (target: '{target_text or selector}').",
+        )
+
+    if is_messaging_url and MESSAGING_CONTEXT_BUTTON_PATTERN.search(comb):
+        return (
+            True,
+            "Send Message / Post Publicly",
+            f"This appears to send a message or post publicly on {domain} (target: '{target_text or selector}').",
+        )
+
+    # 3. Account / Security
+    if ACCOUNT_TEXT_PATTERN.search(comb):
+        return (
+            True,
+            "Account / Security Modification",
+            f"This appears to be a critical account or subscription change on {domain} (target: '{target_text or selector}').",
+        )
+
+    return False, "", ""
+
+
 
 def _normalize_url(url: str) -> str:
     """
@@ -511,7 +618,9 @@ class _BrowserSession:
         """
         await asyncio.sleep(0.3)
         pages = self._context.pages
-        return pages[0] if pages else await self._context.new_page()
+        page = pages[0] if pages else await self._context.new_page()
+        self._attach_download_listener(page)
+        return page
 
     async def _launch(self):
         """
@@ -629,6 +738,7 @@ class _BrowserSession:
         # If somehow page got closed, open a fresh one
         if self._page is None or self._page.is_closed():
             self._page = await self._context.new_page()
+            self._attach_download_listener(self._page)
             await asyncio.sleep(0.2)
         return self._page
 
@@ -787,6 +897,7 @@ class _BrowserSession:
         page = await self._get_page()
         ctx  = page.context
         new  = await ctx.new_page()
+        self._attach_download_listener(new)
         self._page = new
         if url:
             return await self.go_to(url)
@@ -834,6 +945,72 @@ class _BrowserSession:
             return f"Page reloaded: {page.url}"
         except Exception as e:
             return f"Reload error: {e}"
+
+    def _attach_download_listener(self, page: Page):
+        try:
+            page.on("download", self._on_download)
+        except Exception as e:
+            print(f"[Browser] Error attaching download listener: {e}")
+
+    def _on_download(self, download: Download):
+        """Intercepts browser-triggered downloads and gates them via confirm.request()."""
+        try:
+            filename = getattr(download, "suggested_filename", "") or "downloaded_file"
+            source_url = getattr(download, "url", "")
+            target_dir = Path.home() / "Downloads"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = target_dir / filename
+
+            from core import confirm
+
+            title = f"Download File: {filename}"
+            detail = (
+                f"File: {filename}\n"
+                f"Source: {source_url}\n"
+                f"Destination: {target_path}\n\n"
+                f"Do you want to download and save this file?"
+            )
+
+            def _save():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        download.save_as(str(target_path)),
+                        self._loop
+                    )
+                    future.result(timeout=60)
+                    if target_path.exists() and target_path.stat().st_size > 0:
+                        return f"Download complete: {filename} ({target_path.stat().st_size} bytes) saved to {target_path}."
+                    else:
+                        return f"Download failed: file {filename} is missing or empty."
+                except Exception as err:
+                    return f"Download failed: {err}"
+
+            confirm.request(
+                key="browser_download",
+                title=title,
+                detail=detail,
+                run=_save,
+            )
+        except Exception as e:
+            print(f"[Browser] Exception in _on_download: {e}")
+
+    async def _inspect_element_for_sensitive(self, selector: str = None, text: str = None) -> tuple[str, str]:
+        """Return (element_text, element_aria_or_value) for element if found in live DOM."""
+        if not self._page or self._page.is_closed():
+            return ("", "")
+        try:
+            el = None
+            if text:
+                el = self._page.get_by_text(text, exact=False).first
+            elif selector:
+                el = self._page.locator(selector).first
+            if el and await el.count() > 0:
+                txt = (await el.inner_text()) if hasattr(el, "inner_text") else ""
+                val = (await el.get_attribute("value")) or (await el.get_attribute("aria-label")) or (await el.get_attribute("title")) or ""
+                return (txt or "", val or "")
+        except Exception:
+            pass
+        return ("", "")
 
     async def close_browser(self) -> str:
         await self._async_close()
@@ -993,6 +1170,12 @@ def browser_control(
         _log(player, result)
         return result
 
+    # ── Download action ──────────────────────────────────────────────────────
+    if action == "download":
+        result = _download_file(params, browser, player)
+        _log(player, result)
+        return result
+
     # ── Interactive actions (click/type/read…) ───────────────────────────────
     # These require a physically controllable browser; the automation window
     # only opens here, and as soon as it opens it goes to the user's last
@@ -1013,34 +1196,14 @@ def browser_control(
                 print(f"[Browser] Could not resume last page ({last}): {e}")
 
         if action == "click":
-            result = sess.run(sess.click(params.get("selector"), params.get("text")))
-        elif action == "type":
-            result = sess.run(sess.type_text(
-                params.get("selector"), params.get("text", ""), params.get("clear_first", True)))
-        elif action == "scroll":
-            result = sess.run(sess.scroll(params.get("direction", "down"), int(params.get("amount", 500))))
-        elif action == "fill_form":
-            result = sess.run(sess.fill_form(params.get("fields", {})))
+            result = _execute_interactive_action(sess, action, params)
         elif action == "smart_click":
-            result = sess.run(sess.smart_click(params.get("description", "")))
-        elif action == "smart_type":
-            result = sess.run(sess.smart_type(params.get("description", ""), params.get("text", "")))
-        elif action == "get_text":
-            result = sess.run(sess.get_text())
-        elif action == "get_url":
-            result = sess.run(sess.get_url())
-        elif action == "press":
-            result = sess.run(sess.press(params.get("key", "Enter")))
-        elif action == "close_tab":
-            result = sess.run(sess.close_tab())
-        elif action == "screenshot":
-            result = sess.run(sess.screenshot(params.get("path")))
-        elif action == "back":
-            result = sess.run(sess.back())
-        elif action == "forward":
-            result = sess.run(sess.forward())
-        elif action == "reload":
-            result = sess.run(sess.reload())
+            result = _execute_interactive_action(sess, action, params)
+        elif action == "fill_form":
+            result = _execute_interactive_action(sess, action, params)
+        elif action in ("press", "type", "scroll", "smart_type", "get_text", "get_url",
+                        "close_tab", "screenshot", "back", "forward", "reload"):
+            result = _execute_interactive_action(sess, action, params)
         else:
             result = f"Unknown browser action: '{action}'"
 
@@ -1051,6 +1214,163 @@ def browser_control(
 
     _log(player, result)
     return result
+
+
+def _download_file(params: dict, browser: str = None, player=None) -> str:
+    url = params.get("url", "").strip()
+    filename = params.get("filename", "")
+    if not filename and url:
+        p_name = Path(urlparse(url).path).name
+        filename = p_name if p_name else "download"
+    filename = filename or "download"
+    destination = params.get("destination", "")
+    target_dir = Path(destination).parent if destination else (Path.home() / "Downloads")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = Path(destination) if destination else (target_dir / filename)
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    title = f"Download File: {filename}"
+    detail = (
+        f"File: {filename}\n"
+        f"Source URL: {url}\n"
+        f"Destination: {target_path}\n\n"
+        f"Do you want to download and save this file?"
+    )
+
+    def _execute_download():
+        try:
+            sess = _registry.get(browser)
+            async def _do_dl():
+                p = await sess._get_page()
+                async with p.expect_download(timeout=30_000) as download_info:
+                    await p.goto(url)
+                dl = await download_info.value
+                await dl.save_as(str(target_path))
+                return dl
+
+            sess.run(_do_dl())
+            if target_path.exists() and target_path.stat().st_size > 0:
+                return f"Download complete: {filename} ({target_path.stat().st_size} bytes) saved to {target_path}."
+            else:
+                return f"Download failed: {filename} is missing or empty."
+        except Exception as err:
+            return f"Download failed: {err}"
+
+    return confirm.request(
+        key="browser_download",
+        title=title,
+        detail=detail,
+        run=_execute_download,
+    )
+
+
+def _execute_interactive_action(sess: _BrowserSession, action: str, params: dict) -> str:
+    # Check sensitive-action heuristics for potentially consequential actions
+    current_url = ""
+    try:
+        current_url = sess.run(sess.get_url())
+    except Exception:
+        current_url = params.get("url", "") or _registry._last_native_url or ""
+
+    target_text = params.get("text") or params.get("description") or ""
+    selector = params.get("selector") or ""
+
+    # Check if selector points to a button or consequential element in live DOM
+    if selector and not target_text:
+        try:
+            live_txt, live_val = sess.run(sess._inspect_element_for_sensitive(selector=selector))
+            target_text = f"{live_txt} {live_val}".strip()
+        except Exception:
+            pass
+
+    try:
+        is_sensitive, action_type, reason = _detect_sensitive_action(
+            url=current_url,
+            action=action,
+            target_text=target_text,
+            selector=selector,
+        )
+    except Exception as e:
+        # Fallback keyword check
+        comb = f"{target_text} {selector}".lower()
+        if any(w in comb for w in ["buy now", "place order", "pay now", "send", "post", "checkout"]):
+            is_sensitive = True
+            action_type = "Sensitive Browser Action (Fallback)"
+            reason = f"Keyword fallback matched sensitive action (detection error: {e})."
+        else:
+            # Fail closed: treat detection failure on potentially consequential action as sensitive
+            print(f"[Browser] Sensitive detection error ({e}); failing closed to require confirmation.")
+            is_sensitive = True
+            action_type = "Unverified Consequential Action"
+            reason = f"Security verification encountered an error ({e}). Requiring explicit confirmation to prevent unauthorized action."
+
+
+    if is_sensitive:
+        from core import confirm
+        if confirm.pending_title():
+            return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+        target_label = target_text or selector or action
+        title = f"Browser Action: {action_type}"
+        detail = (
+            f"Action: {action}\n"
+            f"URL: {current_url}\n"
+            f"Target: '{target_label}'\n"
+            f"{reason}\n\n"
+            f"Do you want to authorize this action?"
+        )
+
+        def _execute_sensitive():
+            try:
+                return _run_direct_action(sess, action, params)
+            except Exception as err:
+                return f"Browser error ({action}): {err}"
+
+        return confirm.request(
+            key="browser_sensitive_action",
+            title=title,
+            detail=detail,
+            run=_execute_sensitive,
+        )
+
+    return _run_direct_action(sess, action, params)
+
+
+def _run_direct_action(sess: _BrowserSession, action: str, params: dict) -> str:
+    if action == "click":
+        return sess.run(sess.click(params.get("selector"), params.get("text")))
+    elif action == "type":
+        return sess.run(sess.type_text(
+            params.get("selector"), params.get("text", ""), params.get("clear_first", True)))
+    elif action == "scroll":
+        return sess.run(sess.scroll(params.get("direction", "down"), int(params.get("amount", 500))))
+    elif action == "fill_form":
+        return sess.run(sess.fill_form(params.get("fields", {})))
+    elif action == "smart_click":
+        return sess.run(sess.smart_click(params.get("description", "")))
+    elif action == "smart_type":
+        return sess.run(sess.smart_type(params.get("description", ""), params.get("text", "")))
+    elif action == "get_text":
+        return sess.run(sess.get_text())
+    elif action == "get_url":
+        return sess.run(sess.get_url())
+    elif action == "press":
+        return sess.run(sess.press(params.get("key", "Enter")))
+    elif action == "close_tab":
+        return sess.run(sess.close_tab())
+    elif action == "screenshot":
+        return sess.run(sess.screenshot(params.get("path")))
+    elif action == "back":
+        return sess.run(sess.back())
+    elif action == "forward":
+        return sess.run(sess.forward())
+    elif action == "reload":
+        return sess.run(sess.reload())
+    else:
+        return f"Unknown browser action: '{action}'"
 
 
 def _log(player, text: str):
@@ -1069,7 +1389,7 @@ TOOL = {
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"
+                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all | download"
             },
             "browser": {
                 "type": "STRING",
@@ -1077,7 +1397,7 @@ TOOL = {
             },
             "url": {
                 "type": "STRING",
-                "description": "URL for go_to / new_tab action"
+                "description": "URL for go_to / new_tab / download action"
             },
             "query": {
                 "type": "STRING",
@@ -1114,6 +1434,14 @@ TOOL = {
             "path": {
                 "type": "STRING",
                 "description": "Save path for screenshot"
+            },
+            "filename": {
+                "type": "STRING",
+                "description": "Suggested file name for download action"
+            },
+            "destination": {
+                "type": "STRING",
+                "description": "Destination file path for download action"
             },
             "incognito": {
                 "type": "BOOLEAN",

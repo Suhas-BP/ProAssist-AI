@@ -296,10 +296,13 @@ class MultilingualIntentEngine:
             cleaned = re.sub(r"\b(youtube|on|play|video|song)\b", " ", lower, flags=re.IGNORECASE)
             cleaned = re.sub(r"(यूट्यूब|ಯೂಟ್ಯೂಬ್|पर|ನಲ್ಲಿ|में|बजाओ|चलाओ|प्ले\s+करो|ಪ್ಲೇ\s+ಮಾಡಿ|ಹಾಕಿ|ಪ್ಲೇ|गाना|ಹಾಡು)", " ", cleaned)
             query_val = " ".join(cleaned.split()).strip()
+            if not query_val:
+                result["intent"] = "unknown"
+                return result
             result["intent"] = "youtube_play"
             result["target"] = "youtube"
-            result["query"] = query_val or "Believer"
-            result["canonical_command"] = f"play {result['query']} on youtube"
+            result["query"] = query_val
+            result["canonical_command"] = f"play {query_val} on youtube"
             return result
 
         # 4. YouTube Search
@@ -308,22 +311,32 @@ class MultilingualIntentEngine:
             cleaned = re.sub(r"\b(youtube|for|on|search|find)\b", " ", lower, flags=re.IGNORECASE)
             cleaned = re.sub(r"(यूट्यूब|ಯೂಟ್ಯೂಬ್|पर|ನಲ್ಲಿ|में|खोजो|सर्च\s+करो|ढूंढो|ಹುಡುಕಿ|ಸರ್ಚ್\s+ಮಾಡಿ|ಸರ್ಚ್|ಮಾಡಿ)", " ", cleaned)
             query_val = " ".join(cleaned.split()).strip()
+            if not query_val:
+                result["intent"] = "open_website"
+                result["target"] = "youtube"
+                result["canonical_command"] = "open youtube"
+                return result
             result["intent"] = "youtube_search"
             result["target"] = "youtube"
-            result["query"] = query_val or "music"
-            result["canonical_command"] = f"search youtube for {result['query']}"
+            result["query"] = query_val
+            result["canonical_command"] = f"search youtube for {query_val}"
             return result
 
         # 5. Google Search
         has_google = "google" in lower or "गूगल" in lower or "ಗೂಗಲ್" in lower
         if (has_google or "web" in lower or "इंटरनेट" in lower or "ಇಂಟರ್ನೆಟ್" in lower) and is_search:
-            cleaned = re.sub(r"\b(google|for|the\s+web|web|search|find|look\s+up)\b", " ", lower, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\b(google|for|on|in|using|via|the\s+web|web|search|find|look\s+up)\b", " ", lower, flags=re.IGNORECASE)
             cleaned = re.sub(r"(गूगल|ಗೂಗಲ್|पर|ನಲ್ಲಿ|में|खोजो|सर्च\s+करो|ढूंढो|ಹುಡುಕಿ|ಸರ್ಚ್\s+ಮಾಡಿ|ಸರ್ಚ್|ಮಾಡಿ)", " ", cleaned)
             query_val = " ".join(cleaned.split()).strip()
+            if not query_val:
+                result["intent"] = "open_website"
+                result["target"] = "google"
+                result["canonical_command"] = "open google"
+                return result
             result["intent"] = "google_search"
             result["target"] = "google"
-            result["query"] = query_val or "news"
-            result["canonical_command"] = f"search google for {result['query']}"
+            result["query"] = query_val
+            result["canonical_command"] = f"search google for {query_val}"
             return result
 
         # 6. Notepad Writing
@@ -340,10 +353,15 @@ class MultilingualIntentEngine:
             for verb in ["type", "write", "लिखो", "टाइप करो", "ಬರೆಯಿರಿ", "ಟೈಪ್ ಮಾಡಿ", "that"]:
                 cleaned = cleaned.replace(verb, " ")
             text_val = " ".join(cleaned.split()).strip()
+            if not text_val:
+                result["intent"] = "open_notepad"
+                result["target"] = "notepad"
+                result["canonical_command"] = "open notepad"
+                return result
             result["intent"] = "notepad_write"
             result["target"] = "notepad"
-            result["query"] = text_val or "Project completed"
-            result["canonical_command"] = f"type {result['query']} in notepad"
+            result["query"] = text_val
+            result["canonical_command"] = f"type {text_val} in notepad"
             return result
 
         # 7. Math / Calculation
@@ -413,11 +431,17 @@ class MultilingualIntentEngine:
                 or re.search(r"([a-zA-Z\u0900-\u097F]+)\s*को\s*ईमेल", lower)
                 or re.search(r"([a-zA-Z\u0C80-\u0CFF]+)\s*ಗೆ\s*ಇಮೇಲ್", lower)
             )
-            rec_name = rec_match.group(1).strip() if rec_match else "Rahul"
-            result["intent"] = "email_compose"
-            result["recipient"] = rec_name
-            result["canonical_command"] = f"write an email to {rec_name}"
-            return result
+            if rec_match:
+                rec_name = rec_match.group(1).strip()
+                result["intent"] = "email_compose"
+                result["recipient"] = rec_name
+                result["canonical_command"] = f"write an email to {rec_name}"
+                return result
+            elif has_email:
+                result["intent"] = "email_compose"
+                result["recipient"] = None
+                result["canonical_command"] = "write an email"
+                return result
 
         # 10. Document / PDF Summarization
         is_summary = (

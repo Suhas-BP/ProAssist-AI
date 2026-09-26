@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import platform
 from pathlib import Path
@@ -92,6 +93,7 @@ def _restore_from_trash(original: Path) -> str:
 
 _SAFE_ROOTS: list[Path] = [
     Path.home(),
+    Path.cwd(),
 ]
 
 def _is_safe_path(target: Path) -> bool:
@@ -163,18 +165,32 @@ def _resolve_path(raw: str) -> Path:
     if lower in shortcuts:
         return shortcuts[lower]
 
-    # "desktop/notes/a.md" and "desktop\notes\a.md" — a shortcut followed by a
-    # sub-path.  Without this branch the whole string falls through to the
-    # relative-path return below and is resolved against the process CWD instead
-    # of the real Desktop: an "Access denied" when the project lives outside the
-    # home directory, or — worse — a silent write into a stray "desktop" folder
-    # inside the project when it lives inside it.
-    head, sep, rest = raw.replace("\\", "/").partition("/")
+    # "desktop/notes/a.md", "pictures/camera_capture_retake.png" — shortcut + sub-path
+    normalized = raw.replace("\\", "/")
+    head, sep, rest = normalized.partition("/")
     if sep and head.lower() in shortcuts:
         rest = rest.strip("/")
         return shortcuts[head.lower()] / rest if rest else shortcuts[head.lower()]
 
-    return Path(raw).expanduser()
+    expanded = Path(raw).expanduser()
+    if expanded.is_absolute():
+        return expanded
+
+    cwd_cand = Path.cwd() / raw
+    if cwd_cand.exists():
+        return cwd_cand
+
+    cap_cand = Path.cwd() / "data" / "captures" / raw
+    if cap_cand.exists():
+        return cap_cand
+
+    # Check relative to standard user folders if candidate exists
+    for folder in shortcuts.values():
+        cand = folder / raw
+        if cand.exists():
+            return cand
+
+    return expanded
 
 def _format_size(b: int) -> str:
     for unit in ["B", "KB", "MB", "GB", "TB"]:
@@ -241,6 +257,8 @@ def create_file(path: str, name: str = "", content: str = "") -> str:
             except Exception:
                 previous = None
         target.write_text(content, encoding="utf-8")
+        if not target.exists():
+            return f"Failed to confirm file creation for '{target.name}'."
         push_undo(f"created {target.name}",
                   _undo_write(target, previous) if existed else _undo_create(target))
         return f"File created: {target.name}"
@@ -284,11 +302,27 @@ def delete_file(path: str, name: str = "") -> str:
             return f"Protected directory, cannot delete: {target.name}"
 
         original = target.resolve()
-        result   = _safe_trash(target)
-        if result.startswith("Moved to Trash"):
-            push_undo(f"deleted {original.name}",
-                      lambda p=original: _restore_from_trash(p))
-        return result
+
+        def _execute():
+            try:
+                result = _safe_trash(original)
+                if result.startswith("Moved to Trash"):
+                    push_undo(f"deleted {original.name}",
+                              lambda p=original: _restore_from_trash(p))
+                return result
+            except Exception as err:
+                return f"Could not delete: {err}"
+
+        from core import confirm
+        if confirm.pending_title():
+            return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+        return confirm.request(
+            key="delete_file",
+            title=f"Delete File: {original.name}",
+            detail=f"Move to Trash: {original}\nLocation: {original.parent}",
+            run=_execute,
+        )
 
     except PermissionError:
         return f"Permission denied: {path}"
@@ -439,6 +473,9 @@ def write_file(path: str, name: str = "", content: str = "",
         with open(target, mode, encoding="utf-8") as f:
             f.write(content)
 
+        if not target.exists():
+            return f"Failed to confirm file write for '{target.name}'."
+
         action = "Appended to" if append else "Written to"
         if undoable:
             push_undo(f"wrote to {target.name}", _undo_write(target, previous))
@@ -538,6 +575,410 @@ def get_disk_usage(path: str = "home") -> str:
         return f"Could not get disk usage: {e}"
 
 
+def _parse_organize_task(text: str) -> tuple[str, str, str]:
+    """Parse natural language organization task into (source, file_type, destination)."""
+    text = text.strip()
+    m = re.search(
+        r"(?:put|move|organize|transfer|place)\s+(?:all\s+)?(?:my\s+)?(.+?)\s+from\s+(.+?)\s+(?:in|into|to)\s+(?:a\s+folder\s+(?:called|named)\s+|folder\s+)?['\"]?([^'\"]+?)['\"]?$",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        filter_str = m.group(1).strip()
+        source_str = m.group(2).strip()
+        dest_str = m.group(3).strip().rstrip(".!?,")
+        return source_str, filter_str, dest_str
+    return "", "", ""
+
+
+def _resolve_type_filter(filter_str: str) -> tuple[set[str], str]:
+    """Resolve file type or natural language category into file extensions."""
+    clean = filter_str.lower().strip()
+    clean = re.sub(r"\b(files|file|documents|items)\b", "", clean).strip()
+
+    category_map = {
+        "pdf": {".pdf"},
+        "pdfs": {".pdf"},
+        "image": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "images": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "photo": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "photos": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "picture": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "pictures": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
+        "video": {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+        "videos": {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+        "movie": {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+        "movies": {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
+        "music": {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+        "audio": {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+        "song": {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+        "songs": {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a"},
+        "document": {".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".odt", ".ods", ".odp"},
+        "documents": {".pdf", ".doc", ".docx", ".txt", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".odt", ".ods", ".odp"},
+        "archive": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+        "archives": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+        "zip": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+        "zips": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
+        "code": {".py", ".js", ".ts", ".html", ".css", ".json", ".xml", ".cpp", ".java", ".cs", ".go", ".rs", ".sh"},
+    }
+
+    if clean in category_map:
+        return category_map[clean], filter_str
+
+    exts = set()
+    for part in re.split(r"[,;\s]+", clean):
+        part = part.strip().lstrip("*")
+        if not part:
+            continue
+        if not part.startswith("."):
+            part = f".{part}"
+        exts.add(part.lower())
+
+    if exts:
+        return exts, filter_str
+
+    return set(), filter_str
+
+
+def organize_files(params: dict) -> str:
+    """Natural-language multi-step file organization.
+    Parses source directory, file-type filter, and destination folder.
+    Pre-plans matching files, gates behind confirm.request(), executes on confirm,
+    and supports undo via core/undo.py.
+    """
+    task = str(params.get("task") or params.get("description") or params.get("query") or "").strip()
+    source_arg = params.get("source") or params.get("path") or ""
+    dest_arg = params.get("destination") or params.get("folder") or params.get("target") or ""
+    filter_arg = params.get("file_type") or params.get("extension") or params.get("filter") or ""
+
+    parsed_src, parsed_flt, parsed_dst = _parse_organize_task(task) if task else ("", "", "")
+
+    source = source_arg or parsed_src or "downloads"
+    destination = dest_arg or parsed_dst or ""
+    filter_str = filter_arg or parsed_flt or ""
+
+    if not destination:
+        return "No destination folder specified for organization."
+
+    src_dir = _resolve_path(source)
+    if not _is_safe_path(src_dir):
+        return f"Access denied (source): {src_dir}"
+    if not src_dir.exists():
+        return f"Source directory not found: {source}"
+    if not src_dir.is_dir():
+        return f"Source is not a directory: {source}"
+
+    dest_norm = destination.replace("\\", "/").strip()
+    if "/" in dest_norm:
+        dst_dir = _resolve_path(destination)
+    elif dest_norm.lower() in ("desktop", "downloads", "documents", "pictures", "music", "videos", "home"):
+        dst_dir = _resolve_path(destination)
+    else:
+        dst_dir = src_dir / destination
+
+    if not _is_safe_path(dst_dir):
+        return f"Access denied (destination): {dst_dir}"
+
+    target_extensions, filter_desc = _resolve_type_filter(filter_str)
+
+    plan: list[tuple[Path, Path]] = []
+    skipped: list[str] = []
+
+    for item in sorted(src_dir.iterdir()):
+        if item.is_dir() or item.name.startswith("."):
+            continue
+        if dst_dir.exists() and item.resolve() == dst_dir.resolve():
+            continue
+        ext = item.suffix.lower()
+        if target_extensions and ext not in target_extensions:
+            continue
+        target_file = dst_dir / item.name
+        if target_file.exists():
+            skipped.append(item.name)
+            continue
+        plan.append((item, target_file))
+
+    if not plan:
+        desc = filter_desc if filter_desc.lower().endswith("s") else f"{filter_desc}s"
+        msg = f"No matching {desc} found in {src_dir.name}/ to organize." if filter_desc else f"No matching files found in {src_dir.name}/ to organize."
+        if skipped:
+            msg += f" ({len(skipped)} file(s) already exist in '{dst_dir.name}' and were skipped)."
+        return msg
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    preview_lines = [f"• {src.name} → {dst_dir.name}/" for src, dst in plan[:10]]
+    if len(plan) > 10:
+        preview_lines.append(f"... and {len(plan) - 10} more.")
+
+    detail = (
+        f"Source folder: {src_dir}\n"
+        f"Destination folder: {dst_dir}\n"
+        f"Filter: {filter_desc or 'All matching files'}\n"
+        f"Total files to move: {len(plan)}\n\n"
+        f"Planned moves:\n" + "\n".join(preview_lines)
+    )
+    if skipped:
+        detail += f"\n\nSkipped (conflict in destination): {len(skipped)} file(s)"
+
+    title = f"Organize Files: Move {len(plan)} file(s) to '{dst_dir.name}'"
+
+    def _execute():
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        journal: list[tuple[Path, Path]] = []
+        for src, dst in plan:
+            try:
+                if src.exists():
+                    origin = src.resolve()
+                    shutil.move(str(src), str(dst))
+                    if dst.exists():
+                        moved += 1
+                        journal.append((origin, dst.resolve()))
+            except Exception as e:
+                print(f"[file_controller] organize error moving {src.name}: {e}")
+
+        if journal:
+            def _undo_organize(entries=tuple(journal)):
+                restored = 0
+                for orig_src, moved_dst in entries:
+                    try:
+                        if moved_dst.exists():
+                            orig_src.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(moved_dst), str(orig_src))
+                            restored += 1
+                    except Exception as err:
+                        print(f"[file_controller] undo organize error: {err}")
+                try:
+                    if dst_dir.exists() and dst_dir.is_dir() and not any(dst_dir.iterdir()):
+                        dst_dir.rmdir()
+                except Exception:
+                    pass
+                return f"Restored {restored} file(s) back to {src_dir.name}/."
+
+            push_undo(f"organize files into {dst_dir.name} ({len(journal)} files)", _undo_organize)
+
+        res = f"Organized {moved} file(s) from '{src_dir.name}' into '{dst_dir.name}'."
+        if skipped:
+            res += f" ({len(skipped)} file(s) skipped due to name conflicts)."
+        return res
+
+    return confirm.request(
+        key="file_organize",
+        title=title,
+        detail=detail,
+        run=_execute,
+    )
+
+
+def bulk_move(params: dict) -> str:
+    """Move multiple files matching a list or pattern from source to destination."""
+    source = params.get("source") or params.get("path") or "desktop"
+    destination = params.get("destination") or params.get("folder")
+    if not destination:
+        return "No destination specified for bulk move."
+
+    src_dir = _resolve_path(source)
+    dst_dir = _resolve_path(destination)
+    if not _is_safe_path(src_dir):
+        return f"Access denied (source): {src_dir}"
+    if not _is_safe_path(dst_dir):
+        return f"Access denied (destination): {dst_dir}"
+    if not src_dir.exists() or not src_dir.is_dir():
+        return f"Source directory not found: {source}"
+
+    files_list = params.get("files") or []
+    pattern = params.get("pattern") or params.get("extension") or ""
+
+    candidates = []
+    if files_list:
+        for fname in files_list:
+            fpath = src_dir / fname
+            if fpath.exists() and fpath.is_file():
+                candidates.append(fpath)
+    elif pattern:
+        glob_pat = pattern if any(c in pattern for c in "*?[]") else f"*.{pattern.lstrip('.')}"
+        for fpath in sorted(src_dir.glob(glob_pat)):
+            if fpath.is_file() and not fpath.name.startswith("."):
+                candidates.append(fpath)
+    else:
+        return "No files or pattern specified for bulk move."
+
+    plan: list[tuple[Path, Path]] = []
+    skipped: list[str] = []
+    for item in candidates:
+        target = dst_dir / item.name
+        if target.exists():
+            skipped.append(item.name)
+            continue
+        plan.append((item, target))
+
+    if not plan:
+        return f"No files available to move in {src_dir.name}/."
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    preview_lines = [f"• {src.name} → {dst_dir.name}/" for src, dst in plan[:10]]
+    if len(plan) > 10:
+        preview_lines.append(f"... and {len(plan) - 10} more.")
+
+    detail = (
+        f"Source: {src_dir}\n"
+        f"Destination: {dst_dir}\n"
+        f"Total files: {len(plan)}\n\n"
+        f"Planned moves:\n" + "\n".join(preview_lines)
+    )
+
+    title = f"Bulk Move: {len(plan)} file(s) to '{dst_dir.name}'"
+
+    def _execute():
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        journal: list[tuple[Path, Path]] = []
+        for src, dst in plan:
+            try:
+                origin = src.resolve()
+                shutil.move(str(src), str(dst))
+                if dst.exists():
+                    moved += 1
+                    journal.append((origin, dst.resolve()))
+            except Exception as e:
+                print(f"[file_controller] bulk move error: {e}")
+
+        if journal:
+            def _undo_bulk_move(entries=tuple(journal)):
+                restored = 0
+                for orig_src, moved_dst in entries:
+                    try:
+                        if moved_dst.exists():
+                            orig_src.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(moved_dst), str(orig_src))
+                            restored += 1
+                    except Exception as e:
+                        print(f"[file_controller] undo bulk move error: {e}")
+                return f"Restored {restored} file(s) back to {src_dir.name}/."
+
+            push_undo(f"bulk move ({len(journal)} files)", _undo_bulk_move)
+
+        return f"Bulk move complete: {moved} file(s) moved to '{dst_dir.name}'."
+
+    return confirm.request(
+        key="file_bulk_move",
+        title=title,
+        detail=detail,
+        run=_execute,
+    )
+
+
+def bulk_rename(params: dict) -> str:
+    """Bulk rename files in a directory using pattern replacement or prefix/suffix."""
+    path = params.get("path") or "desktop"
+    target_dir = _resolve_path(path)
+    if not _is_safe_path(target_dir):
+        return f"Access denied: {target_dir}"
+    if not target_dir.exists() or not target_dir.is_dir():
+        return f"Directory not found: {path}"
+
+    find_str = params.get("find") or params.get("pattern") or ""
+    replace_str = params.get("replace") or params.get("replacement") or ""
+    prefix = params.get("prefix", "")
+    suffix = params.get("suffix", "")
+    extension = params.get("extension", "")
+
+    plan: list[tuple[Path, Path]] = []
+    skipped: list[str] = []
+
+    for item in sorted(target_dir.iterdir()):
+        if item.is_dir() or item.name.startswith("."):
+            continue
+        if extension and item.suffix.lower() != (extension if extension.startswith(".") else f".{extension}").lower():
+            continue
+
+        stem = item.stem
+        ext = item.suffix
+        new_stem = stem
+
+        if find_str:
+            if find_str not in stem:
+                continue
+            new_stem = stem.replace(find_str, replace_str)
+
+        if prefix:
+            new_stem = f"{prefix}{new_stem}"
+        if suffix:
+            new_stem = f"{new_stem}{suffix}"
+
+        new_name = f"{new_stem}{ext}"
+        if new_name == item.name:
+            continue
+
+        new_path = target_dir / new_name
+        if new_path.exists():
+            skipped.append(item.name)
+            continue
+
+        plan.append((item, new_path))
+
+    if not plan:
+        return f"No files matched the rename pattern in {target_dir.name}/."
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    preview_lines = [f"• {src.name} → {dst.name}" for src, dst in plan[:10]]
+    if len(plan) > 10:
+        preview_lines.append(f"... and {len(plan) - 10} more.")
+
+    detail = (
+        f"Directory: {target_dir}\n"
+        f"Total files to rename: {len(plan)}\n\n"
+        f"Planned renames:\n" + "\n".join(preview_lines)
+    )
+
+    title = f"Bulk Rename: {len(plan)} file(s) in '{target_dir.name}'"
+
+    def _execute():
+        renamed = 0
+        journal: list[tuple[Path, Path]] = []
+        for src, dst in plan:
+            try:
+                origin = src.resolve()
+                src.rename(dst)
+                if dst.exists():
+                    renamed += 1
+                    journal.append((origin, dst.resolve()))
+            except Exception as e:
+                print(f"[file_controller] bulk rename error: {e}")
+
+        if journal:
+            def _undo_bulk_rename(entries=tuple(journal)):
+                restored = 0
+                for orig_src, renamed_dst in entries:
+                    try:
+                        if renamed_dst.exists():
+                            renamed_dst.rename(orig_src)
+                            restored += 1
+                    except Exception as e:
+                        print(f"[file_controller] undo bulk rename error: {e}")
+                return f"Reverted {restored} renamed file(s) in {target_dir.name}/."
+
+            push_undo(f"bulk rename ({len(journal)} files)", _undo_bulk_rename)
+
+        return f"Bulk rename complete: {renamed} file(s) renamed in '{target_dir.name}'."
+
+    return confirm.request(
+        key="file_bulk_rename",
+        title=title,
+        detail=detail,
+        run=_execute,
+    )
+
+
 def organize_desktop() -> str:
     type_map = {
         "Images":    {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic"},
@@ -551,40 +992,61 @@ def organize_desktop() -> str:
     }
 
     desktop = _get_desktop()
-    moved, skipped = [], []
-    journal: list[tuple[Path, Path]] = []   # (where it was, where it went)
+    plan: list[tuple[Path, Path]] = []
+    skipped: list[str] = []
 
-    try:
-        for item in desktop.iterdir():
-            # Leave folders, hidden files and organize-folders untouched
-            if item.is_dir() or item.name.startswith("."):
-                continue
-            if item.name in {k for k in type_map}:
-                continue
+    for item in sorted(desktop.iterdir()):
+        if item.is_dir() or item.name.startswith("."):
+            continue
+        if item.name in type_map:
+            continue
 
-            ext        = item.suffix.lower()
-            target_dir = desktop / "Others"
-            for folder, exts in type_map.items():
-                if ext in exts:
-                    target_dir = desktop / folder
-                    break
+        ext = item.suffix.lower()
+        target_dir = desktop / "Others"
+        for folder, exts in type_map.items():
+            if ext in exts:
+                target_dir = desktop / folder
+                break
 
-            target_dir.mkdir(exist_ok=True)
-            new_path = target_dir / item.name
+        new_path = target_dir / item.name
+        if new_path.exists():
+            skipped.append(item.name)
+            continue
+        plan.append((item, new_path))
 
-            if new_path.exists():
-                skipped.append(item.name)
-                continue
+    if not plan:
+        return "Desktop is already organized. No files to move."
 
-            origin = item.resolve()
-            shutil.move(str(item), str(new_path))
-            journal.append((origin, new_path.resolve()))
-            moved.append(f"{item.name} → {target_dir.name}/")
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
 
-        # One command, dozens of moves — so one undo that reverses all of them.
-        # Without this, "organize my desktop" is the single least reversible
-        # thing the assistant can do to a person's files, and it was completely
-        # ungated.
+    preview_lines = [f"• {src.name} → {dst.parent.name}/" for src, dst in plan[:8]]
+    if len(plan) > 8:
+        preview_lines.append(f"... and {len(plan) - 8} more.")
+
+    detail = (
+        f"Total files to move: {len(plan)}\n"
+        f"Desktop path: {desktop}\n\n"
+        f"Planned moves:\n" + "\n".join(preview_lines)
+    )
+
+    title = f"Organize Desktop: Move {len(plan)} file(s)"
+
+    def _execute():
+        moved = 0
+        journal: list[tuple[Path, Path]] = []
+        for src, dst in plan:
+            try:
+                dst.parent.mkdir(exist_ok=True)
+                origin = src.resolve()
+                shutil.move(str(src), str(dst))
+                if dst.exists():
+                    moved += 1
+                    journal.append((origin, dst.resolve()))
+            except Exception as e:
+                print(f"[file_controller] organize error: {e}")
+
         if journal:
             def _undo_organize(entries=tuple(journal)):
                 restored = 0
@@ -596,8 +1058,6 @@ def organize_desktop() -> str:
                             restored += 1
                     except Exception as e:
                         print(f"[file] undo organize: {moved_to.name}: {e}")
-                # Clear away the folders we created, but only while they are
-                # empty — anything the user put in since stays.
                 for folder in {m.parent for _o, m in entries}:
                     try:
                         if folder.exists() and folder.is_dir() and not any(folder.iterdir()):
@@ -607,18 +1067,17 @@ def organize_desktop() -> str:
                 return f"{restored} file(s) put back on the desktop."
             push_undo(f"organized the desktop ({len(journal)} files)", _undo_organize)
 
-        result = f"Desktop organized: {len(moved)} files moved."
-        if moved:
-            preview = moved[:8]
-            result += "\n" + "\n".join(preview)
-            if len(moved) > 8:
-                result += f"\n... and {len(moved) - 8} more."
+        result = f"Desktop organized: {moved} files moved."
         if skipped:
-            result += f"\n{len(skipped)} file(s) skipped (name conflict)."
+            result += f" ({len(skipped)} file(s) skipped due to name conflicts)."
         return result
 
-    except Exception as e:
-        return f"Could not organize desktop: {e}"
+    return confirm.request(
+        key="file_organize_desktop",
+        title=title,
+        detail=detail,
+        run=_execute,
+    )
 
 
 def get_file_info(path: str, name: str = "") -> str:
@@ -708,11 +1167,27 @@ def file_controller(
         elif action == "disk_usage":
             return get_disk_usage(path)
 
+        elif action == "organize" or action == "organize_files":
+            return organize_files(params)
+
+        elif action == "bulk_move":
+            return bulk_move(params)
+
+        elif action == "bulk_rename":
+            return bulk_rename(params)
+
         elif action == "organize_desktop":
             return organize_desktop()
 
         elif action == "info":
             return get_file_info(path, name=name)
+
+        elif params.get("task") or params.get("description"):
+            task_str = params.get("task") or params.get("description")
+            src_str, flt_str, dst_str = _parse_organize_task(task_str)
+            if src_str and dst_str:
+                return organize_files(params)
+            return f"Unknown task: '{task_str}'"
 
         else:
             return f"Unknown action: '{action}'"
@@ -724,13 +1199,13 @@ def file_controller(
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "file_controller",
-    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage.",
+    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, organize.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": "list | create_file | create_folder | delete | move | copy | rename | read | write | find | largest | disk_usage | organize_desktop | info"
+                "description": "list | create_file | create_folder | delete | move | bulk_move | copy | rename | bulk_rename | read | write | find | largest | disk_usage | organize | organize_desktop | info"
             },
             "path": {
                 "type": "STRING",
@@ -738,7 +1213,7 @@ TOOL = {
             },
             "destination": {
                 "type": "STRING",
-                "description": "Destination path for move/copy"
+                "description": "Destination path for move/copy/organize"
             },
             "new_name": {
                 "type": "STRING",
@@ -754,11 +1229,15 @@ TOOL = {
             },
             "extension": {
                 "type": "STRING",
-                "description": "File extension to search (e.g. .pdf)"
+                "description": "File extension to search or filter (e.g. .pdf)"
             },
             "count": {
                 "type": "INTEGER",
                 "description": "Number of results for largest"
+            },
+            "task": {
+                "type": "STRING",
+                "description": "Natural language task (e.g. 'put all my PDFs from Downloads into a folder called College')"
             }
         },
         "required": [

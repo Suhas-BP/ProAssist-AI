@@ -21,10 +21,10 @@ def _gemini_available() -> bool:
 
 
 def _note_gemini_error(exc: Exception) -> None:
-    """Trip the breaker when the error is a quota / rate-limit rejection."""
+    """Trip the breaker when the error is a quota / rate-limit rejection or ladder failure."""
     global _quota_blocked_until
     msg = str(exc)
-    if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+    if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "every Gemini model on the ladder failed" in msg:
         with _quota_lock:
             already = time.monotonic() < _quota_blocked_until
             _quota_blocked_until = time.monotonic() + _QUOTA_COOLDOWN_SEC
@@ -207,6 +207,9 @@ def _gemini_headlines(n: int = 5) -> tuple[list[str], str]:
     """
     import re
     from core import gemini
+
+    if not _gemini_available():
+        return [], ""
 
     response = gemini.call(
         f"Current world news: {n} headlines. Numbered list, titles only.",

@@ -3,6 +3,8 @@ import sys
 import json
 import re
 import time
+import shutil
+import platform
 from pathlib import Path
 
 
@@ -258,21 +260,36 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
     if not to_install:
         return f"All dependencies already installed: {', '.join(dependencies)}"
 
-    print(f"[DevAgent] 📦 Installing: {to_install}")
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + to_install,
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=120, cwd=str(project_dir)
-        )
-        if result.returncode == 0:
-            return f"Installed: {', '.join(to_install)}"
-        return f"Install warning (non-fatal): {result.stderr[:200]}"
-    except subprocess.TimeoutExpired:
-        return "Dependency install timed out (non-fatal)."
-    except Exception as e:
-        return f"Install error (non-fatal): {e}"
+    print(f"[DevAgent] 📦 Dependencies requiring installation: {to_install}")
+
+    def _execute():
+        print(f"[DevAgent] 📦 Installing: {to_install}")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install"] + to_install,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=120, cwd=str(project_dir)
+            )
+            if result.returncode == 0:
+                return f"Installed: {', '.join(to_install)}"
+            return f"Install warning (non-fatal): {result.stderr[:200]}"
+        except subprocess.TimeoutExpired:
+            return "Dependency install timed out (non-fatal)."
+        except Exception as e:
+            return f"Install error (non-fatal): {e}"
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    pkg_list_str = ", ".join(to_install)
+    return confirm.request(
+        key="pip_install",
+        title=f"Install Dependencies: {pkg_list_str[:50]}",
+        detail=f"Project: {project_dir.name}\nPackages: {pkg_list_str}\nTarget directory: {project_dir}",
+        run=_execute,
+    )
 
 def _open_vscode(project_dir: Path) -> bool:
     vscode_candidates = [
@@ -295,60 +312,179 @@ def _open_vscode(project_dir: Path) -> bool:
             continue
     return False
 
+_SAFE_COMMAND_EXACT = {
+    "python --version",
+    "python3 --version",
+    "node --version", "node -v",
+    "npm --version", "npm -v",
+    "git status", "git branch", "git log", "git diff", "git --version",
+    "dir", "ls", "pwd", "cd", "whoami", "ver",
+}
+
+_SAFE_COMMAND_PREFIXES = (
+    "python --version",
+    "python3 --version",
+    "node --version", "node -v",
+    "npm --version", "npm -v",
+    "git status", "git log", "git diff", "git branch", "git --version",
+    "echo ",
+)
+
+_BLOCKED_PATTERNS = [
+    # Disk formatting / partition destruction
+    r"\b(format|diskpart|mkfs|fdisk)\b",
+    # Recursive / force deletion commands
+    r"\bdel\s+.*[/\\-](s|f)\b",
+    r"\brmdir\s+.*[/\\-](s|q)\b",
+    r"\brm\s+.*-[a-zA-Z]*r",
+    r"remove-item\s+.*-recurse",
+    # Registry deletion
+    r"\breg\s+delete\b",
+    # Encoded / obfuscated execution
+    r"\bpowershell\b.*(-enc|-encodedcommand)\b",
+    # Piped remote execution
+    r"(curl|wget|invoke-webrequest|iwr)\b.*\|\s*(sh|bash|powershell|pwsh|iex|invoke-expression)\b",
+    # System path references and parent directory traversal
+    r"c:[\\/]windows|system32|%systemroot%|%windir%",
+    r"(\.\.[\\/]|\.\.\s|\.\.$)",
+    # Credential extraction and sensitive stores
+    r"\b(sam|ntds\.dit|mimikatz|procdump|sekurlsa)\b",
+    r"id_rsa|id_ed25519|\.ssh[\\/]",
+    r"\.aws[\\/]credentials|\.env\b",
+    r"reg\s+query\s+.*\\(sam|system|security)",
+    # Disabling security tools / firewalls
+    r"set-mppreference\s+.*-disablerealtime",
+    r"sc\s+stop\s+windefend",
+    r"netsh\s+advfirewall\s+set\s+.*state\s+off",
+    r"\biptables\s+-F\b",
+]
+
+
+def _classify_command(command: str) -> str:
+    """Classifies a CLI command into SAFE, BLOCKED, or REQUIRES_CONFIRMATION."""
+    cmd = command.strip().lower()
+
+    for pattern in _BLOCKED_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return "BLOCKED"
+
+    if cmd in _SAFE_COMMAND_EXACT or any(cmd.startswith(p) for p in _SAFE_COMMAND_PREFIXES):
+        return "SAFE"
+
+    return "REQUIRES_CONFIRMATION"
+
+
 def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
     print(f"[DevAgent] 🚀 Running: {run_command}")
-    try:
-        parts = run_command.split()
+
+    if not run_command or not run_command.strip():
+        return "No command provided."
+
+    classification = _classify_command(run_command)
+    if classification == "BLOCKED":
+        msg = f"BLOCKED: Command '{run_command}' was rejected by security policy (destructive or dangerous pattern detected)."
+        print(f"[DevAgent] ⛔ {msg}")
+        return msg
+
+    # ── Shell Builtin Intercepts (commands with no standalone executable) ──
+    cmd_clean = run_command.strip().lower()
+    if cmd_clean == "cd":
+        # 'cd' with no args in a shell prints current directory.
+        # Without shell=True, 'cd' has no standalone executable on Windows.
+        return f"STDOUT:\n{project_dir.resolve()}"
+
+    if cmd_clean == "ver":
+        # 'ver' is a cmd.exe shell builtin with no standalone executable.
+        if platform.system() == "Windows":
+            win_ver = sys.getwindowsversion()
+            return f"STDOUT:\nMicrosoft Windows [Version {win_ver.major}.{win_ver.minor}.{win_ver.build}]"
+        return f"STDOUT:\n{platform.platform()}"
+
+    parts = run_command.split()
+    if parts:
         if parts[0].lower() == "python":
             parts[0] = sys.executable
+        else:
+            resolved = shutil.which(parts[0])
+            if resolved:
+                parts[0] = resolved
 
-        result = subprocess.run(
-            parts,
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=timeout,
-            cwd=str(project_dir)
+    def _execute():
+        try:
+            result = subprocess.run(
+                parts,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=timeout,
+                cwd=str(project_dir)
+            )
+
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+
+            combined_parts = []
+            if stdout:
+                combined_parts.append(f"STDOUT:\n{stdout}")
+            if stderr:
+                combined_parts.append(f"STDERR:\n{stderr}")
+
+            return "\n\n".join(combined_parts) if combined_parts else "Ran with no output."
+
+        except subprocess.TimeoutExpired:
+            return f"Timed out after {timeout}s — long-running app (server/GUI) is likely working."
+        except FileNotFoundError as e:
+            return f"Command not found: {e}"
+        except Exception as e:
+            return f"Run error: {e}"
+
+    if classification == "REQUIRES_CONFIRMATION":
+        from core import confirm
+        if confirm.pending_title():
+            return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+        return confirm.request(
+            key="dev_agent_run",
+            title=f"Execute Command: {run_command[:60]}",
+            detail=f"Project: {project_dir.name}\nCommand: {run_command}\nWorking directory: {project_dir}",
+            run=_execute,
         )
 
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
+    return _execute()
 
-        combined_parts = []
-        if stdout:
-            combined_parts.append(f"STDOUT:\n{stdout}")
-        if stderr:
-            combined_parts.append(f"STDERR:\n{stderr}")
-
-        return "\n\n".join(combined_parts) if combined_parts else "Ran with no output."
-
-    except subprocess.TimeoutExpired:
-        return f"Timed out after {timeout}s — long-running app (server/GUI) is likely working."
-    except FileNotFoundError as e:
-        return f"Command not found: {e}"
-    except Exception as e:
-        return f"Run error: {e}"
-
-def _try_auto_install(error_output: str, project_dir: Path) -> bool:
-    """If there is a ModuleNotFoundError, tries to auto-install the missing package."""
+def _try_auto_install(error_output: str, project_dir: Path) -> str:
+    """If there is a ModuleNotFoundError, requests confirmation to auto-install the missing package."""
     pattern = re.compile(
         r"No module named ['\"]([a-zA-Z0-9_\-\.]+)['\"]", re.IGNORECASE
     )
     match = pattern.search(error_output)
     if not match:
-        return False
+        return ""
 
     pkg = match.group(1).replace("_", "-").split(".")[0]
-    print(f"[DevAgent] 🔧 Auto-installing missing package: {pkg}")
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", pkg],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=60, cwd=str(project_dir)
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    print(f"[DevAgent] 🔧 Missing package detected: {pkg}")
+
+    def _execute():
+        print(f"[DevAgent] 📦 Auto-installing: {pkg}")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=60, cwd=str(project_dir)
+            )
+            return f"Installed: {pkg}" if result.returncode == 0 else f"Failed to install {pkg}"
+        except Exception as e:
+            return f"Install error: {e}"
+
+    from core import confirm
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+
+    return confirm.request(
+        key="pip_auto_install",
+        title=f"Auto-install Missing Package: {pkg}",
+        detail=f"Project: {project_dir.name}\nMissing module: {match.group(1)}\nPackage: {pkg}\nTarget directory: {project_dir}",
+        run=_execute,
+    )
 
 def _fix_files(
     error_output: str,
@@ -521,6 +657,13 @@ def _build_project(
     if dependencies:
         install_result = _install_dependencies(dependencies, project_dir)
         log(install_result)
+        if install_result.startswith("[CONFIRMATION_PENDING]"):
+            msg = (
+                f"Project '{proj_name}' is paused awaiting user confirmation on screen to install dependencies. "
+                f"Saved to: {project_dir}"
+            )
+            if speak: speak("I need your confirmation on screen to install project dependencies, sir.")
+            return f"{install_result}\n\nStatus: {msg}"
 
     _open_vscode(project_dir)
 
@@ -531,6 +674,22 @@ def _build_project(
         log(f"Running project (attempt {attempt}/{MAX_FIX_ATTEMPTS})...")
         last_output = _run_project(run_command, project_dir, timeout)
         log(f"Output preview: {last_output[:150]}")
+
+        if last_output.startswith("[CONFIRMATION_PENDING]"):
+            msg = (
+                f"Project '{proj_name}' execution is paused awaiting user confirmation on screen for '{run_command}'. "
+                f"Saved to: {project_dir}"
+            )
+            if speak: speak("I need your confirmation on screen to run the project, sir.")
+            return f"{last_output}\n\nStatus: {msg}"
+
+        if last_output.startswith("BLOCKED:"):
+            msg = (
+                f"Project '{proj_name}' execution was blocked by security policy for '{run_command}'. "
+                f"Saved to: {project_dir}"
+            )
+            if speak: speak("Project execution was blocked by security policy, sir.")
+            return f"{last_output}\n\nStatus: {msg}"
 
         if not _has_error(last_output, run_command):
             msg = (
@@ -546,10 +705,18 @@ def _build_project(
 
         error_type = _classify_error(last_output)
         if error_type == "dependency_error" and auto_installs < 3:
-            installed = _try_auto_install(last_output, project_dir)
-            if installed:
+            install_result = _try_auto_install(last_output, project_dir)
+            if install_result.startswith("[CONFIRMATION_PENDING]"):
+                msg = (
+                    f"Project '{proj_name}' execution is paused awaiting user confirmation on screen to install missing package. "
+                    f"Saved to: {project_dir}"
+                )
+                if speak: speak("I need your confirmation on screen to install a missing package, sir.")
+                return f"{install_result}\n\nStatus: {msg}"
+
+            if install_result and not install_result.startswith("There is already"):
                 auto_installs += 1
-                log("Missing dependency installed, retrying...")
+                log("Missing dependency installation requested, retrying...")
                 time.sleep(1)
                 continue
 

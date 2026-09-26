@@ -212,6 +212,8 @@ def _send_messenger(receiver: str, message: str) -> str:
 
     return f"Message sent to {receiver} via Messenger."
 
+import difflib
+
 _PLATFORM_MAP = [
     ({"whatsapp", "wp", "wapp"},              _send_whatsapp),
     ({"telegram", "tg"},                      _send_telegram),
@@ -220,6 +222,112 @@ _PLATFORM_MAP = [
     ({"discord"},                              _send_discord),
     ({"messenger", "facebook", "fb"},         _send_messenger),
 ]
+
+
+def _load_known_contacts() -> tuple[list[str], dict[str, str]]:
+    """
+    Load known contact names and alias-to-canonical mappings from local storage.
+    Returns: (canonical_contacts_list, alias_to_canonical_map)
+    """
+    contact_files = [
+        _base_dir() / "data" / "contacts.json",
+        _base_dir() / "primary" / "data" / "contacts.json",
+        _base_dir() / "config" / "contacts.json",
+    ]
+    canonical_contacts: list[str] = []
+    alias_map: dict[str, str] = {}
+
+    for cp in contact_files:
+        if cp.exists():
+            try:
+                data = json.loads(cp.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(v, dict):
+                            canon_name = v.get("name") or k.title()
+                            nickname = v.get("nickname")
+                        else:
+                            canon_name = str(v)
+                            nickname = None
+
+                        if canon_name and canon_name not in canonical_contacts:
+                            canonical_contacts.append(canon_name)
+
+                        # Register aliases pointing to canonical name
+                        if canon_name:
+                            alias_map[canon_name.lower().strip()] = canon_name
+                            alias_map[k.lower().strip()] = canon_name
+                            if nickname:
+                                alias_map[nickname.lower().strip()] = canon_name
+            except Exception:
+                pass
+
+    return canonical_contacts, alias_map
+
+
+def _resolve_contact(query: str, known_contacts: list[str] | None = None) -> tuple[str, float, str]:
+    """
+    Fuzzy-matches a spoken/parsed contact name against known contacts and aliases.
+    Returns: (resolved_name, confidence_score, status)
+    status is one of:
+      - 'EXACT': exact match (score 1.0)
+      - 'CONFIDENT': high confidence match with clear margin over runner-up
+      - 'AMBIGUOUS': multiple candidates with close scores (narrow margin)
+      - 'DIRECT': unlisted contact / no contacts database found, direct pass-through
+      - 'UNKNOWN': potential match with borderline confidence
+    """
+    if not query:
+        return "", 0.0, "UNKNOWN"
+
+    q_lower = query.lower().strip()
+
+    if known_contacts is not None:
+        contacts = known_contacts
+        alias_map = {c.lower().strip(): c for c in contacts}
+    else:
+        contacts, alias_map = _load_known_contacts()
+
+    if not contacts and not alias_map:
+        return query.strip(), 1.0, "DIRECT"
+
+    # 1. Exact alias/name match check
+    if q_lower in alias_map:
+        return alias_map[q_lower], 1.0, "EXACT"
+
+    # 2. Score against all registered alias variations, grouped by canonical name
+    scored: list[tuple[str, float]] = []
+    for alias, canon in alias_map.items():
+        sm_ratio = difflib.SequenceMatcher(None, q_lower, alias).ratio()
+        q_tokens = set(q_lower.split())
+        a_tokens = set(alias.split())
+        token_ratio = len(q_tokens & a_tokens) / max(len(q_tokens | a_tokens), 1) if (q_tokens or a_tokens) else 0.0
+        score = max(sm_ratio, token_ratio)
+        scored.append((canon, score))
+
+    # Deduplicate by canonical name, taking the best score among its aliases
+    best_per_canon: dict[str, float] = {}
+    for canon, score in scored:
+        if canon not in best_per_canon or score > best_per_canon[canon]:
+            best_per_canon[canon] = score
+
+    ranked = sorted(best_per_canon.items(), key=lambda x: x[1], reverse=True)
+
+    # If top score is low (< 0.50), the query does not match any local contact.
+    # Treat it as a direct contact name to search in the target messaging app.
+    if not ranked or ranked[0][1] < 0.50:
+        return query.strip(), 1.0, "DIRECT"
+
+    best_name, best_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    # Ambiguity check: if margin between top 2 distinct candidates is narrow (< 15%) and best_score < 0.95
+    if len(ranked) > 1 and (best_score - second_score) < 0.15 and best_score < 0.95:
+        return best_name, best_score, "AMBIGUOUS"
+
+    if best_score >= 0.70:
+        return best_name, best_score, "CONFIDENT"
+
+    return best_name, best_score, "UNKNOWN"
 
 
 def _resolve_platform(platform_str: str):
@@ -237,29 +345,43 @@ def send_message(
     session_memory=None,
 ) -> str:
     params       = parameters or {}
-    receiver     = params.get("receiver", "").strip()
+    receiver_raw = params.get("receiver", "").strip()
     message_text = params.get("message_text", "").strip()
     platform     = params.get("platform", "whatsapp").strip()
 
-    if not receiver:
+    if not receiver_raw:
         return "Please specify a recipient."
     if not message_text:
         return "Please specify the message content."
     if not _PYAUTOGUI:
         return "PyAutoGUI is not installed — cannot control the desktop."
 
-    preview = message_text[:50] + ("…" if len(message_text) > 50 else "")
-    print(f"[SendMessage] 📨 {platform} → {receiver}: {preview}")
+    # Resolve contact with fuzzy matching and confidence checks
+    resolved_contact, score, status = _resolve_contact(receiver_raw)
+
+    # Log ASR-transcribed name alongside resolved contact at send time
+    print(f"[SendMessage] [MATCH] ASR transcribed: '{receiver_raw}' -> Resolved: '{resolved_contact}' (Score: {score:.0%}, Status: {status})")
     if player:
-        player.write_log(f"[msg] {platform} → {receiver}")
+        player.write_log(f"[msg] ASR: '{receiver_raw}' -> '{resolved_contact}' ({score:.0%})")
+
+    # Ambiguity guard: If ambiguous or low confidence on configured contacts, confirm before sending
+    if status == "AMBIGUOUS":
+        return f"Did you mean to message '{resolved_contact}'? Please confirm the contact name."
+    if status == "UNKNOWN":
+        return f"Could not find contact '{receiver_raw}' with high confidence. Did you mean to message '{resolved_contact}'?"
+
+    preview = message_text[:50] + ("..." if len(message_text) > 50 else "")
+    print(f"[SendMessage] [SEND] {platform} -> {resolved_contact}: {preview}")
+    if player:
+        player.write_log(f"[msg] {platform} -> {resolved_contact}")
 
     try:
         handler = _resolve_platform(platform)
-        result  = handler(receiver, message_text)
+        result  = handler(resolved_contact, message_text)
     except Exception as e:
         result = f"Could not send message: {e}"
 
-    print(f"[SendMessage] {'✅' if 'sent' in result.lower() else '❌'} {result}")
+    print(f"[SendMessage] [RESULT] {result}")
     if player:
         player.write_log(f"[msg] {result}")
 

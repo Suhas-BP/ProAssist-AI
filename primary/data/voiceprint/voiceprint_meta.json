@@ -5,7 +5,7 @@
   "sample_duration_seconds": 3.5,
   "embedding_dimensions": 256,
   "intra_sample_consistency": 0.7619,
-  "threshold": 0.5,
+  "threshold": 0.45,
   "diagnostics": {
     "sample_1": {
       "raw_rms": 0.040785349905490875,

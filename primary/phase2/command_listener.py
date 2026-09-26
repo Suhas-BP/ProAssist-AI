@@ -254,7 +254,16 @@ class CommandListener:
                 initial_prompt=cmd_prompt,
                 hotwords=cmd_hotwords
             )
-            text = " ".join(seg.text for seg in segments).strip()
+            valid_segments = []
+            for seg in segments:
+                # Discard hallucinated or low-confidence segments on near-silence/trailing noise
+                no_speech = getattr(seg, "no_speech_prob", 0.0)
+                avg_logprob = getattr(seg, "avg_logprob", 0.0)
+                if no_speech > 0.65 or avg_logprob < -1.2:
+                    continue
+                valid_segments.append(seg.text)
+
+            text = " ".join(valid_segments).strip()
 
             # Safety fallback: If Whisper somehow still produced unsupported foreign scripts (Thai, Japanese, etc.)
             # immediately re-decode with language="en"
@@ -268,7 +277,8 @@ class CommandListener:
                     initial_prompt=cmd_prompt,
                     hotwords=cmd_hotwords
                 )
-                text = " ".join(seg.text for seg in segments).strip()
+                valid_segments = [s.text for s in segments if getattr(s, "no_speech_prob", 0.0) <= 0.65]
+                text = " ".join(valid_segments).strip()
                 target_lang = "en"
 
             self.last_whisper_info = {
