@@ -67,8 +67,21 @@ class MockHUD:
         self.logs.clear()
 
 
+import pytest
+
 hud = MockHUD()
 confirm.bind(hud.show, hud.hide, hud.log)
+
+
+@pytest.fixture(autouse=True)
+def reset_hud_between_tests():
+    hud.clear()
+    with confirm._lock:
+        confirm._pending = None
+    yield
+    hud.clear()
+    with confirm._lock:
+        confirm._pending = None
 
 
 def run_test(test_name, fn):

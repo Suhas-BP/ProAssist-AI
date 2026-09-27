@@ -55,8 +55,18 @@ class _Pending:
     at:      float
 
 
+@dataclass
+class _ResolutionListener:
+    callback: Callable[..., None]
+    target_key: Optional[str]
+    oneshot: bool
+
+
 _pending: Optional[_Pending] = None
 _lock = threading.Lock()
+_listeners: list[_ResolutionListener] = []
+_recent_resolutions: dict[str, tuple[bool, Optional[str], float]] = {}  # key -> (accepted, result, monotonic_timestamp)
+RECENT_TTL_SECONDS = 120.0
 
 # Set once at startup by main.py. Signature: (title, detail) -> None for show,
 # and () -> None for hide. Both are marshalled onto the Qt thread by the UI.
@@ -112,16 +122,65 @@ def request(key: str, title: str, detail: str, run: Callable[[], str]) -> str:
     )
 
 
+def _dispatch_listener_callback(
+    callback: Callable,
+    key: str,
+    accepted: bool,
+    result: Optional[str] = None,
+) -> None:
+    """Dispatches callback with (key, accepted, result), falling back to (key, accepted)."""
+    try:
+        callback(key, accepted, result)
+    except TypeError:
+        callback(key, accepted)
+
+
+def _record_and_notify_listeners(
+    listeners: list[_ResolutionListener],
+    key: Optional[str],
+    accepted: bool,
+    result: Optional[str] = None,
+) -> None:
+    if not key:
+        return
+    now = time.monotonic()
+    with _lock:
+        _recent_resolutions[key] = (accepted, result, now)
+        stale_keys = [k for k, (_, _, t) in _recent_resolutions.items() if now - t > RECENT_TTL_SECONDS]
+        for sk in stale_keys:
+            _recent_resolutions.pop(sk, None)
+
+    for l in listeners:
+        try:
+            _dispatch_listener_callback(l.callback, key, accepted, result)
+        except Exception as e:
+            _log(f"ERR: Resolution listener exception: {e}")
+
+
 def resolve(accepted: bool) -> None:
     """Called by the UI when the user presses CONFIRM or CANCEL.
 
     Runs the stored callable on a worker thread — this is invoked from the Qt
     thread, and shutting the machine down from inside a button handler would
     freeze the interface on its way out."""
-    global _pending
+    global _pending, _listeners
 
     with _lock:
         p, _pending = _pending, None
+        key = p.key if p is not None else None
+
+        # Snapshot listeners to notify
+        to_notify: list[_ResolutionListener] = []
+        if key:
+            remaining_listeners = []
+            for l in _listeners:
+                if l.target_key is None or l.target_key == key:
+                    to_notify.append(l)
+                    if not l.oneshot:
+                        remaining_listeners.append(l)
+                else:
+                    remaining_listeners.append(l)
+            _listeners = remaining_listeners
 
     if _hide_cb:
         try:
@@ -134,21 +193,69 @@ def resolve(accepted: bool) -> None:
 
     if time.monotonic() - p.at > TIMEOUT_SECONDS:
         _log(f"SYS: Confirmation expired — {p.title}")
+        _record_and_notify_listeners(to_notify, key, False, "Confirmation expired.")
         return
 
     if not accepted:
         _log(f"SYS: Cancelled — {p.title}")
+        _record_and_notify_listeners(to_notify, key, False, "User cancelled confirmation.")
         return
 
     def _worker():
         try:
             result = p.run() or "Done."
             _log(f"SYS: Confirmed — {p.title}. {result}")
+            _record_and_notify_listeners(to_notify, p.key, True, str(result))
         except Exception as e:
             _log(f"ERR: {p.title} failed — {e}")
+            _record_and_notify_listeners(to_notify, p.key, False, f"Action execution error: {e}")
 
     threading.Thread(target=_worker, daemon=True,
                      name=f"confirm-{p.key}").start()
+
+
+def add_resolution_listener(
+    callback: Callable[..., None],
+    target_key: Optional[str] = None,
+    oneshot: bool = True,
+) -> Callable[[], None]:
+    """
+    Register a callback to be notified when a confirmation is resolved.
+
+    If target_key matches an entry in _recent_resolutions within RECENT_TTL_SECONDS,
+    the callback is invoked immediately (replay cache defense-in-depth).
+
+    Returns an unregister callable.
+    """
+    with _lock:
+        now = time.monotonic()
+        # Replay cache check
+        if target_key and target_key in _recent_resolutions:
+            accepted, res, ts = _recent_resolutions[target_key]
+            if now - ts <= RECENT_TTL_SECONDS:
+                try:
+                    _dispatch_listener_callback(callback, target_key, accepted, res)
+                except Exception as e:
+                    _log(f"ERR: Resolution listener exception during replay: {e}")
+                if oneshot:
+                    return lambda: None
+
+        listener = _ResolutionListener(callback=callback, target_key=target_key, oneshot=oneshot)
+        _listeners.append(listener)
+
+    def unregister():
+        with _lock:
+            if listener in _listeners:
+                _listeners.remove(listener)
+
+    return unregister
+
+
+def remove_resolution_listener(callback: Callable[..., None]) -> None:
+    """Remove all registered listeners matching callback."""
+    with _lock:
+        global _listeners
+        _listeners = [l for l in _listeners if l.callback != callback]
 
 
 def pending_title() -> str:
@@ -159,3 +266,13 @@ def pending_title() -> str:
         if time.monotonic() - _pending.at > TIMEOUT_SECONDS:
             return ""
         return _pending.title
+
+
+def pending_key() -> str:
+    """Returns the key of the current pending confirmation, or '' if none."""
+    with _lock:
+        if _pending is None:
+            return ""
+        if time.monotonic() - _pending.at > TIMEOUT_SECONDS:
+            return ""
+        return _pending.key

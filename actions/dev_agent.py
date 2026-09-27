@@ -442,7 +442,7 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
         if confirm.pending_title():
             return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
         return confirm.request(
-            key="dev_agent_run",
+            key="run_project",
             title=f"Execute Command: {run_command[:60]}",
             detail=f"Project: {project_dir.name}\nCommand: {run_command}\nWorking directory: {project_dir}",
             run=_execute,
@@ -480,7 +480,7 @@ def _try_auto_install(error_output: str, project_dir: Path) -> str:
         return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
 
     return confirm.request(
-        key="pip_auto_install",
+        key="dev_agent_build",
         title=f"Auto-install Missing Package: {pkg}",
         detail=f"Project: {project_dir.name}\nMissing module: {match.group(1)}\nPackage: {pkg}\nTarget directory: {project_dir}",
         run=_execute,

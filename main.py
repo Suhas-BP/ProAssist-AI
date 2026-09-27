@@ -45,6 +45,7 @@ import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 import sounddevice as sd
 import numpy as np
@@ -83,6 +84,20 @@ from core.permission_manager   import (
 )
 from core.logger               import ActionLogger
 from agent.context             import AgentContext
+from agent.orchestrator        import PlanExecutor, StepCall, PlanCollisionError
+from agent.planner             import (
+    create_plan, ExecutionPlan, PlanState, StepStatus,
+    PlanSecurityRejection, PlanValidationError,
+)
+
+
+class TextCommandCall:
+    """Lightweight FunctionCall shim for text-driven tool dispatches."""
+    def __init__(self, name: str, args: Optional[dict] = None, call_id: str = "text_command_call"):
+        self.name = name
+        self.args = args or {}
+        self.id = call_id
+
 from core                      import audio_devices
 from core.action_loader        import discover_actions
 from core.echo                 import EchoGuard
@@ -506,6 +521,43 @@ TOOL_DECLARATIONS = [
             "required": [],
         },
     },
+    {
+        "name": "orchestrate_plan",
+        "description": (
+            "Creates and executes a structured, multi-step execution plan for complex tasks "
+            "requiring multiple coordinated steps (e.g. desktop cleanup, organizing files, multi-step dev workflows, "
+            "batch file transformations). Pass the high-level goal as a string. "
+            "Do NOT call this for simple, single-action requests (e.g. 'open notepad', 'what's the weather', 'search web') "
+            "— use direct tools for those."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "goal": {
+                    "type": "STRING",
+                    "description": "The user's high-level multi-step objective.",
+                }
+            },
+            "required": ["goal"],
+        },
+    },
+    {
+        "name": "cancel_plan",
+        "description": (
+            "Cancels the currently active or paused multi-step plan. "
+            "Call this when the user says 'cancel plan', 'abort task', 'stop plan', etc."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "reason": {
+                    "type": "STRING",
+                    "description": "Optional cancellation reason.",
+                }
+            },
+            "required": [],
+        },
+    },
 ]
 
 class _ReconnectSignal(Exception):
@@ -742,6 +794,7 @@ class AgentLive:
         self.ui.on_wake_install  = self._ui_wake_install  # () -> (ok, msg)
         self.ui.on_voice_auth_enroll = self._ui_voice_auth_enroll
         AgentContext.get_instance().set_ui(self.ui)
+        self._plan_executor = PlanExecutor(agent=self)
 
     # ── Wake word: state machine ─────────────────────────────────────────────
 
@@ -1048,21 +1101,83 @@ class AgentLive:
         return url, key, f"{url}/auto-login?key={key}", manual
 
     def _on_text_command(self, text: str):
-        if not self._loop or not self.session:
-            return
         # Respect wake-word sleep: a typed command must not be answered while
         # asleep either (the sleep gate is not just for the mic). Wake first with
         # "Agent" or the WAKE NOW button.
         if self._wake_enabled and not self._awake:
             self.ui.write_log("SYS: I'm asleep — say 'Agent' or tap WAKE NOW first.")
             return
-        asyncio.run_coroutine_threadsafe(
-            self.session.send_client_content(
-                turns={"role": "user", "parts": [{"text": text}]},
-                turn_complete=True
-            ),
-            self._loop
-        )
+
+        stripped = text.strip()
+        # Fast command intercept: /cancel or explicit plan cancel
+        if stripped.lower() in ("/cancel", "cancel plan", "abort plan", "stop plan") or stripped.lower().startswith("/cancel"):
+            active = getattr(self, "_plan_executor", None) and self._plan_executor.active_plan
+            if active and not active.is_finished:
+                self._plan_executor.cancel_active_plan(reason="User typed cancellation command")
+                if hasattr(self.ui, "_hide_confirm_banner"):
+                    self.ui._hide_confirm_banner()
+                self.ui.write_log("SYS: Active plan cancelled by user.")
+                self.speak("Plan cancelled.")
+                return
+
+        # Explicit /plan command
+        if stripped.lower().startswith("/plan ") or stripped.lower().startswith("plan: "):
+            goal = stripped[6:].strip() if stripped.lower().startswith("/plan ") else stripped[5:].strip()
+            if goal:
+                loop = getattr(self, "loop", None) or getattr(self, "_loop", None)
+                if loop is None:
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except Exception:
+                            loop = None
+
+                if not loop:
+                    self.ui.write_log("SYS: Cannot execute /plan: no running event loop available.")
+                    if hasattr(self, "speak") and callable(self.speak):
+                        self.speak("Unable to start plan: event loop is not active.")
+                    return
+
+                async def _run_explicit_plan():
+                    fc = TextCommandCall(name="orchestrate_plan", args={"goal": goal}, call_id="text_plan_call")
+                    await self._execute_tool(fc)
+
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(_run_explicit_plan(), loop)
+                else:
+                    loop.run_until_complete(_run_explicit_plan())
+                return
+
+        loop = getattr(self, "loop", None) or getattr(self, "_loop", None)
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    loop = asyncio.get_event_loop()
+                except Exception:
+                    loop = None
+
+        if not loop or not self.session:
+            return
+
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self.session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": text}]},
+                    turn_complete=True
+                ),
+                loop
+            )
+        else:
+            loop.run_until_complete(
+                self.session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": text}]},
+                    turn_complete=True
+                )
+            )
 
     def _tail_active(self) -> bool:
         """True while the speakers may still be finishing our last sentence."""
@@ -1333,6 +1448,25 @@ class AgentLive:
         error_msg = None
         resp_payload = None
 
+        # ── Plan Concurrency Gate ─────────────────────────────────────────────
+        is_plan_dispatch = isinstance(fc, StepCall) and getattr(fc, "is_plan_step", True) is not False
+        active_plan = getattr(self, "_plan_executor", None) and self._plan_executor.active_plan
+        if active_plan and not active_plan.is_finished and not is_plan_dispatch:
+            if name == "cancel_plan":
+                pass
+            else:
+                perm = check_permission(name, _act, args)
+                if perm.level != PermissionLevel.SAFE:
+                    curr_desc = active_plan.current_step.description if active_plan.current_step else "pending step"
+                    msg = (
+                        f"[BLOCKED_PLAN_ACTIVE] A multi-step plan is currently active ({active_plan.state.value}) "
+                        f"at step {active_plan.current_step_index + 1}/{len(active_plan.steps)}: '{curr_desc}'. "
+                        f"Operation '{name}.{_act or 'default'}' requires {perm.level.value} and cannot execute while a plan is active. "
+                        f"Please confirm or cancel the pending plan on screen, or say 'cancel plan' to abort it."
+                    )
+                    print(f"[PlanExecutor] 🛡️ Blocked conflicting live tool call: {name}.{_act or 'default'} ({perm.level.value})")
+                    return types.FunctionResponse(id=fc.id, name=name, response={"result": msg})
+
         print(f"[AGENT] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
@@ -1344,7 +1478,77 @@ class AgentLive:
             self.ui.set_state("WORKING")
 
         try:
-            if name == "save_memory":
+            if name == "orchestrate_plan":
+                goal = str(args.get("goal") or "").strip()
+                if not goal:
+                    result = "[PLAN_ERROR] Missing 'goal' parameter for orchestrate_plan."
+                    resp_payload = {"result": result}
+                elif self._plan_executor.active_plan and not self._plan_executor.active_plan.is_finished:
+                    active = self._plan_executor.active_plan
+                    curr_desc = active.current_step.description if active.current_step else "pending step"
+                    result = (
+                        f"[PLAN_COLLISION] Cannot start a new plan while plan '{active.plan_id}' is active in state "
+                        f"'{active.state.value}' (Step {active.current_step_index + 1}/{len(active.steps)}: '{curr_desc}'). "
+                        f"Say 'cancel plan' or resolve the pending action on screen first."
+                    )
+                    self.ui.write_log(f"PLAN: {result}")
+                    self.speak("A plan is already active. Please cancel it or finish it first.")
+                    resp_payload = {"result": result}
+                else:
+                    self.ui.write_log(f"PLAN: Starting plan for: {goal}")
+                    self.speak(f"Starting plan: {goal[:60]}.")
+                    try:
+                        plan = await loop.run_in_executor(
+                            None, lambda: create_plan(goal=goal, action_registry=self._action_registry)
+                        )
+                        self.ui.write_log(f"PLAN: Decomposed into {len(plan.steps)} validated steps.")
+                        executed_plan = await self._plan_executor.execute_plan(plan)
+                        if executed_plan.state == PlanState.COMPLETED:
+                            result = f"[PLAN_COMPLETED] Goal successfully achieved in {len(executed_plan.steps)} steps."
+                            self.speak(f"Plan complete. All {len(executed_plan.steps)} steps finished successfully.")
+                        elif executed_plan.state == PlanState.PAUSED_FOR_CONFIRMATION:
+                            step = executed_plan.current_step
+                            result = (
+                                f"[CONFIRMATION_PENDING] Plan paused at step {step.step_id} of {len(executed_plan.steps)} "
+                                f"('{step.description}'). Awaiting user confirmation on the HUD screen."
+                            )
+                            self.speak(f"I've paused at step {step.step_id}. Please confirm on screen to {step.description}.")
+                        elif executed_plan.state == PlanState.CANCELLED:
+                            result = f"[PLAN_CANCELLED] Plan was cancelled: {executed_plan.error}"
+                            self.speak("Plan cancelled.")
+                        else:  # PlanState.FAILED
+                            result = f"[PLAN_FAILED] Plan stopped at step {executed_plan.current_step_index + 1}: {executed_plan.error}"
+                            self.speak(f"Plan stopped at step {executed_plan.current_step_index + 1}. {executed_plan.error}")
+                        resp_payload = {"result": result}
+                    except PlanSecurityRejection as sec_exc:
+                        result = f"[PLAN_REJECTED] Security policy rejected plan before execution: {sec_exc}"
+                        self.ui.write_log(f"SEC: {result}")
+                        self.speak("The plan was rejected because it requested an operation blocked by security policy.")
+                        resp_payload = {"result": result}
+                    except PlanValidationError as val_exc:
+                        result = f"[PLAN_VALIDATION_ERROR] Plan could not be validated: {val_exc}"
+                        self.ui.write_log(f"ERR: {result}")
+                        self.speak("I could not generate a valid plan for that request.")
+                        resp_payload = {"result": result}
+                    except Exception as exc:
+                        result = f"[PLAN_ERROR] Unexpected planning error: {exc}"
+                        self.ui.write_log(f"ERR: {result}")
+                        self.speak_error("orchestrate_plan", str(exc))
+                        resp_payload = {"result": result}
+
+            elif name == "cancel_plan":
+                reason = str(args.get("reason") or "Cancelled by user via tool call")
+                cancelled = self._plan_executor.cancel_active_plan(reason=reason)
+                if cancelled:
+                    if hasattr(self.ui, "_hide_confirm_banner"):
+                        self.ui._hide_confirm_banner()
+                    result = f"[PLAN_CANCELLED] Active plan '{cancelled.plan_id}' has been cancelled."
+                    self.speak("Plan cancelled.")
+                else:
+                    result = "No active plan is currently running or paused."
+                resp_payload = {"result": result}
+
+            elif name == "save_memory":
                 category = args.get("category", "notes")
                 key      = args.get("key", "")
                 value    = args.get("value", "")
@@ -1883,6 +2087,18 @@ class AgentLive:
                                     self._end_authorized_session(
                                         reason="user ended the authorized session"
                                     )
+                                if re.search(
+                                    r"\b(cancel plan|abort plan|stop plan|cancel task|stop task)\b",
+                                    full_in,
+                                    re.IGNORECASE,
+                                ):
+                                    active = getattr(self, "_plan_executor", None) and self._plan_executor.active_plan
+                                    if active and not active.is_finished:
+                                        self._plan_executor.cancel_active_plan(reason="User voice commanded cancellation")
+                                        if hasattr(self.ui, "_hide_confirm_banner"):
+                                            self.ui._hide_confirm_banner()
+                                        self.ui.write_log("SYS: Plan cancelled via voice.")
+                                        self.speak("Plan cancelled.")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
                                         "type": "log", "speaker": "user",

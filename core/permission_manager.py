@@ -205,7 +205,7 @@ POLICY_RULES: List[PolicyRule] = [
         action="task",
         level=PermissionLevel.STRONG_CONFIRM,
         reason="Executing desktop automation code requires strong confirmation",
-        key="desktop_task",
+        key="desktop_code",
     ),
     PolicyRule(
         tool="desktop",
@@ -458,7 +458,7 @@ POLICY_RULES: List[PolicyRule] = [
         action="click",
         level=PermissionLevel.STRONG_CONFIRM,
         reason="High-risk browser action (purchasing, sending message, or public posting) requires strong confirmation",
-        key="browser_sensitive_click",
+        key="browser_sensitive_action",
         condition=_is_sensitive_browser_action,
     ),
     PolicyRule(
@@ -466,7 +466,7 @@ POLICY_RULES: List[PolicyRule] = [
         action="smart_click",
         level=PermissionLevel.STRONG_CONFIRM,
         reason="High-risk browser action (purchasing, sending message, or public posting) requires strong confirmation",
-        key="browser_sensitive_smart_click",
+        key="browser_sensitive_action",
         condition=_is_sensitive_browser_action,
     ),
     PolicyRule(
@@ -474,7 +474,7 @@ POLICY_RULES: List[PolicyRule] = [
         action="fill_form",
         level=PermissionLevel.STRONG_CONFIRM,
         reason="High-risk browser form submission requires strong confirmation",
-        key="browser_sensitive_fill_form",
+        key="browser_sensitive_action",
         condition=_is_sensitive_browser_action,
     ),
     PolicyRule(
@@ -661,6 +661,60 @@ def has_confirm_gate(func: Callable, visited: Optional[set] = None) -> bool:
     return False
 
 
+def get_confirm_keys(func: Callable, visited: Optional[set] = None) -> set[str]:
+    """
+    Extract the set of confirmation keys requested via confirm.request(key=...)
+    inside func and any helper functions it delegates to within the same module.
+    """
+    if visited is None:
+        visited = set()
+    if func in visited:
+        return set()
+    visited.add(func)
+
+    found_keys: set[str] = set()
+    try:
+        src = inspect.getsource(func)
+        tree = ast.parse(src)
+    except Exception:
+        return found_keys
+
+    # Find confirm.request(key=...) calls in AST
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            is_confirm = False
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "request":
+                if isinstance(node.func.value, ast.Name) and node.func.value.id == "confirm":
+                    is_confirm = True
+            if is_confirm:
+                # 1. Keyword argument: key="..."
+                for kw in node.keywords:
+                    if kw.arg == "key" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        found_keys.add(kw.value.value)
+                # 2. Positional argument: confirm.request("...")
+                if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    found_keys.add(node.args[0].value)
+
+    # Walk called functions within the same module
+    try:
+        mod = sys.modules.get(func.__module__)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                called_name = node.func.id
+                if mod and hasattr(mod, called_name):
+                    called_obj = getattr(mod, called_name)
+                    if (
+                        callable(called_obj)
+                        and hasattr(called_obj, "__module__")
+                        and called_obj.__module__ == func.__module__
+                    ):
+                        found_keys.update(get_confirm_keys(called_obj, visited))
+    except Exception:
+        pass
+
+    return found_keys
+
+
 def resolve_action_handler(top_handler: Callable, action_name: Optional[str]) -> Callable:
     """
     Given a top-level tool handler and an action name, resolve the exact
@@ -785,5 +839,16 @@ def verify_permission_gates(
                 f"Security Policy Violation: Tool '{r.tool}' (action '{r.action}') is classified "
                 f"as {r.level.value}, but its resolved implementation function '{func_name}' in "
                 f"module '{mod_name}' lacks a required 'confirm.request()' gate!"
+            )
+
+        # Invariant enforcement: verify confirm.request() key matches POLICY_RULES key
+        confirm_keys = get_confirm_keys(target_func)
+        if confirm_keys and r.key not in confirm_keys:
+            func_name = getattr(target_func, "__name__", str(target_func))
+            mod_name = getattr(target_func, "__module__", "unknown")
+            raise SecurityPolicyError(
+                f"Security Policy Violation: Tool '{r.tool}' (action '{r.action}') has policy key "
+                f"'{r.key}', but implementation function '{func_name}' in module '{mod_name}' "
+                f"requests confirmation with key(s) {sorted(confirm_keys)} — key-alignment invariant violated!"
             )
 

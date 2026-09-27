@@ -194,7 +194,7 @@ def _execute_generated_code(code: str, player=None) -> str:
         if confirm.pending_title():
             return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
         return confirm.request(
-            key="desktop_exec",
+            key="desktop_code",
             title="Execute Potentially Destructive Script",
             detail=f"Detected: {threat_summary}\n\nCode:\n{code[:300]}",
             run=lambda: _run_sandbox(code, player=player),
