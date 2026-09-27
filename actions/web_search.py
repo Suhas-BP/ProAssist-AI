@@ -4,6 +4,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 # ── Gemini grounding quota circuit breaker ────────────────────────────────────
 # The google_search grounding tool has its own small quota, separate from plain
@@ -385,35 +387,58 @@ def web_search(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "web_search",
-    "description": "Searches the web. Use for ANY question about current facts, events, prices, or topics — always prefer this over guessing. Modes: 'search' (default), 'news' (latest headlines on a topic), 'research' (deep comprehensive answer), 'price' (product cost lookup), 'compare' (side-by-side comparison of items).",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "query": {
-                "type": "STRING",
-                "description": "Search query or topic"
-            },
-            "mode": {
-                "type": "STRING",
-                "description": "search | news | research | price | compare"
-            },
-            "items": {
-                "type": "ARRAY",
-                "items": {
-                    "type": "STRING"
+class WebSearchTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "web_search"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Searches the web. Use for ANY question about current facts, events, prices, "
+            "or topics — always prefer this over guessing. Modes: 'search' (default), "
+            "'news' (latest headlines on a topic), 'research' (deep comprehensive answer), "
+            "'price' (product cost lookup), 'compare' (side-by-side comparison of items)."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Search query or topic"
                 },
-                "description": "Items to compare (compare mode)"
+                "mode": {
+                    "type": "STRING",
+                    "description": "search | news | research | price | compare"
+                },
+                "items": {
+                    "type": "ARRAY",
+                    "items": {
+                        "type": "STRING"
+                    },
+                    "description": "Items to compare (compare mode)"
+                },
+                "aspect": {
+                    "type": "STRING",
+                    "description": "Comparison aspect: price | specs | reviews | features"
+                }
             },
-            "aspect": {
-                "type": "STRING",
-                "description": "Comparison aspect: price | specs | reviews | features"
-            }
-        },
-        "required": [
-            "query"
-        ]
-    },
-    "handler": web_search,
-}
+            "required": [
+                "query"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return web_search(
+            parameters=parameters or {},
+            response=context.get("response"),
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+        )
+
+
+ACTION = WebSearchTool()
+TOOL = ACTION.to_tool_dict()

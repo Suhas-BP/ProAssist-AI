@@ -10,7 +10,8 @@ import subprocess
 import threading
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
+from core.tool import AgentTool
 
 import re
 from urllib.parse import urlparse
@@ -1381,80 +1382,106 @@ def _log(player, text: str):
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "browser_control",
-    "description": "Controls any web browser. Use for: opening websites, searching the web, clicking elements, filling forms, scrolling, screenshots, navigation, any web-based task. Simple open/search requests launch the user's own browser normally (their real profile and logged-in accounts); interactive actions (click, type, fill_form...) attach an automation browser. Always pass the 'browser' parameter when the user specifies a browser (e.g. 'open in Edge', 'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all | download"
+class BrowserControlTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "browser_control"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Controls any web browser. Use for: opening websites, searching the web, "
+            "clicking elements, filling forms, scrolling, screenshots, navigation, "
+            "any web-based task. Simple open/search requests launch the user's own browser "
+            "normally (their real profile and logged-in accounts); interactive actions "
+            "(click, type, fill_form...) attach an automation browser. Always pass the "
+            "'browser' parameter when the user specifies a browser (e.g. 'open in Edge', "
+            "'use Firefox', 'open Chrome'). Multiple browsers can run simultaneously."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all | download"
+                },
+                "browser": {
+                    "type": "STRING",
+                    "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."
+                },
+                "url": {
+                    "type": "STRING",
+                    "description": "URL for go_to / new_tab / download action"
+                },
+                "query": {
+                    "type": "STRING",
+                    "description": "Search query for search action"
+                },
+                "engine": {
+                    "type": "STRING",
+                    "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"
+                },
+                "selector": {
+                    "type": "STRING",
+                    "description": "CSS selector for click/type"
+                },
+                "text": {
+                    "type": "STRING",
+                    "description": "Text to click or type"
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "Element description for smart_click/smart_type"
+                },
+                "direction": {
+                    "type": "STRING",
+                    "description": "up | down for scroll"
+                },
+                "amount": {
+                    "type": "INTEGER",
+                    "description": "Scroll amount in pixels (default: 500)"
+                },
+                "key": {
+                    "type": "STRING",
+                    "description": "Key name for press action (e.g. Enter, Escape, F5)"
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "Save path for screenshot"
+                },
+                "filename": {
+                    "type": "STRING",
+                    "description": "Suggested file name for download action"
+                },
+                "destination": {
+                    "type": "STRING",
+                    "description": "Destination file path for download action"
+                },
+                "incognito": {
+                    "type": "BOOLEAN",
+                    "description": "Open in private/incognito mode"
+                },
+                "clear_first": {
+                    "type": "BOOLEAN",
+                    "description": "Clear field before typing (default: true)"
+                }
             },
-            "browser": {
-                "type": "STRING",
-                "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."
-            },
-            "url": {
-                "type": "STRING",
-                "description": "URL for go_to / new_tab / download action"
-            },
-            "query": {
-                "type": "STRING",
-                "description": "Search query for search action"
-            },
-            "engine": {
-                "type": "STRING",
-                "description": "Search engine: google | bing | duckduckgo | yandex (default: google)"
-            },
-            "selector": {
-                "type": "STRING",
-                "description": "CSS selector for click/type"
-            },
-            "text": {
-                "type": "STRING",
-                "description": "Text to click or type"
-            },
-            "description": {
-                "type": "STRING",
-                "description": "Element description for smart_click/smart_type"
-            },
-            "direction": {
-                "type": "STRING",
-                "description": "up | down for scroll"
-            },
-            "amount": {
-                "type": "INTEGER",
-                "description": "Scroll amount in pixels (default: 500)"
-            },
-            "key": {
-                "type": "STRING",
-                "description": "Key name for press action (e.g. Enter, Escape, F5)"
-            },
-            "path": {
-                "type": "STRING",
-                "description": "Save path for screenshot"
-            },
-            "filename": {
-                "type": "STRING",
-                "description": "Suggested file name for download action"
-            },
-            "destination": {
-                "type": "STRING",
-                "description": "Destination file path for download action"
-            },
-            "incognito": {
-                "type": "BOOLEAN",
-                "description": "Open in private/incognito mode"
-            },
-            "clear_first": {
-                "type": "BOOLEAN",
-                "description": "Clear field before typing (default: true)"
-            }
-        },
-        "required": [
-            "action"
-        ]
-    },
-    "handler": browser_control,
-}
+            "required": [
+                "action"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return browser_control(
+            parameters=parameters,
+            response=context.get("response"),
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+        )
+
+
+ACTION = BrowserControlTool()
+TOOL = ACTION.to_tool_dict()

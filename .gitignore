@@ -20,6 +20,8 @@ config/whatsapp_web/
 *credentials*.json
 .env
 .env.*
+!.env.example
+!*.env.example
 
 # ── Personal data the assistant accumulates about you ─────────────────────────
 memory/long_term.json
@@ -56,3 +58,9 @@ logs/*.jsonl
 !logs/.gitkeep
 downloads/
 screenshots/
+data/captures/
+
+# ── SearXNG search engine ─────────────────────────────────────────────────────
+searxng/data/
+searxng/.env
+

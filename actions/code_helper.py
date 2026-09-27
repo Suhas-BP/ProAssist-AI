@@ -19,6 +19,10 @@ MAX_BUILD_ATTEMPTS = 3
 # fallback ladder. Writing a model name here is what left this file hanging
 # forever whenever that one alias was unwell.
 from core import gemini
+from core import confirm
+from core.tool import AgentTool, ToolResult
+from actions.dev_agent import _classify_command
+from typing import Dict, Any, Optional
 
 
 def _get_api_key() -> str:
@@ -56,11 +60,23 @@ def _resolve_save_path(output_path: str, language: str) -> Path:
         "bash": ".sh", "shell": ".sh", "powershell": ".ps1",
         "sql": ".sql", "json": ".json", "rust": ".rs", "go": ".go",
     }
-    if output_path:
-        p = Path(output_path)
-        return p if p.is_absolute() else DESKTOP / p
     ext = ext_map.get((language or "python").lower(), ".py")
-    return DESKTOP / f"jarvis_code{ext}"
+    target_dir = DESKTOP
+    if output_path:
+        filename = Path(output_path).name
+        target = target_dir / filename
+    else:
+        target = target_dir / f"jarvis_code{ext}"
+
+    # Ensure writing new files never clobbers an existing file silently
+    if target.exists():
+        stem = target.stem
+        suffix = target.suffix or ext
+        counter = 1
+        while (target_dir / f"{stem}_{counter}{suffix}").exists():
+            counter += 1
+        target = target_dir / f"{stem}_{counter}{suffix}"
+    return target
 
 
 def _read_file(file_path: str) -> tuple[str, str]:
@@ -208,7 +224,7 @@ Fixed code:"""
     return _clean_code(response.text)
 
 
-def _run_file(path: Path, args: list, timeout: int) -> str:
+def _run_file(path: Path, args: list, timeout: int, skip_gate: bool = False) -> str:
     interpreters = {
         ".py":  [sys.executable],
         ".js":  ["node"],
@@ -222,80 +238,120 @@ def _run_file(path: Path, args: list, timeout: int) -> str:
     if not interp:
         return f"No interpreter for {path.suffix}."
 
-    try:
-        result = subprocess.run(
-            interp + [str(path)] + (args or []),
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=str(path.parent)
-        )
-        output = result.stdout.strip()
-        error  = result.stderr.strip()
-        parts  = []
-        if output: parts.append(f"Output:\n{output}")
-        if error:  parts.append(f"Stderr:\n{error}")
-        return "\n\n".join(parts) if parts else "Executed with no output."
+    cmd_parts = interp + [str(path)] + (args or [])
+    full_cmd_str = " ".join([str(x) for x in cmd_parts])
 
-    except subprocess.TimeoutExpired:
-        return f"Timed out after {timeout}s."
-    except FileNotFoundError:
-        return f"Interpreter not found: {interp[0]}."
-    except Exception as e:
-        return f"Execution error: {e}"
+    classification = _classify_command(full_cmd_str)
+    if classification == "BLOCKED":
+        return f"BLOCKED: Command '{full_cmd_str}' was rejected by security policy (destructive or dangerous pattern detected)."
+
+    def _execute():
+        try:
+            result = subprocess.run(
+                cmd_parts,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=timeout, cwd=str(path.parent)
+            )
+            output = result.stdout.strip()
+            error  = result.stderr.strip()
+            parts  = []
+            if output: parts.append(f"Output:\n{output}")
+            if error:  parts.append(f"Stderr:\n{error}")
+            return "\n\n".join(parts) if parts else "Executed with no output."
+
+        except subprocess.TimeoutExpired:
+            return f"Timed out after {timeout}s."
+        except FileNotFoundError:
+            return f"Interpreter not found: {interp[0]}."
+        except Exception as e:
+            return f"Execution error: {e}"
+
+    if classification == "REQUIRES_CONFIRMATION" and not skip_gate:
+        if confirm.pending_title():
+            return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+        return confirm.request(
+            key="code_helper_run",
+            title=f"Execute Code File: {path.name}",
+            detail=f"Command: {full_cmd_str}\nFile: {path}\nDirectory: {path.parent}",
+            run=_execute,
+        )
+
+    return _execute()
 
 
 def _build(description, language, output_path, args, timeout, speak=None, player=None) -> str:
     if not description:
         return "Please describe what you want me to build, sir."
 
-    if player:
-        player.write_log("[Code] Build started...")
-
     lang = language or "python"
+    path = _resolve_save_path(output_path, lang)
+    cmd_str = f"{lang} {path} {' '.join(str(a) for a in (args or []))}".strip()
 
-    try:
-        code, path = _write(description, lang, output_path, player)
-        print(f"[Code] ✅ Written: {path}")
-    except Exception as e:
-        msg = f"Could not write initial code: {e}"
-        if speak: speak(msg)
-        return msg
+    classification = _classify_command(cmd_str)
+    if classification == "BLOCKED":
+        return f"BLOCKED: Build command '{cmd_str}' was rejected by security policy (destructive or dangerous pattern detected)."
 
-    last_output = ""
-    for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
-        print(f"[Code] 🔄 Attempt {attempt}/{MAX_BUILD_ATTEMPTS}")
+    def _execute_build():
         if player:
-            player.write_log(f"[Code] Attempt {attempt}...")
-
-        last_output = _run_file(path, args, timeout)
-
-        if not _has_error(last_output):
-            msg = (
-                f"Build complete, sir. "
-                f"The code is working after {attempt} attempt{'s' if attempt > 1 else ''}. "
-                f"Saved to {path}."
-            )
-            if speak: speak(msg)
-            return f"{msg}\n\nOutput:\n{last_output}"
-
-        print(f"[Code] ⚠️ Error on attempt {attempt}, fixing...")
-        if player:
-            player.write_log(f"[Code] Fixing (attempt {attempt})...")
+            player.write_log("[Code] Build started...")
 
         try:
-            code = _fix_code(code, last_output, description)
-            _save_file(path, code)
+            code, written_path = _write(description, lang, output_path, player)
+            if not written_path.exists() or written_path.read_text(encoding="utf-8") != code:
+                return f"Post-write verification failed: {written_path} was not created properly."
+            print(f"[Code] ✅ Written: {written_path}")
         except Exception as e:
-            msg = f"Could not fix code on attempt {attempt}: {e}"
+            msg = f"Could not write initial code: {e}"
             if speak: speak(msg)
             return msg
 
-    msg = (
-        f"I was unable to build a working version after {MAX_BUILD_ATTEMPTS} attempts, sir. "
-        f"The last error was: {last_output[:200]}"
+        last_output = ""
+        for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
+            print(f"[Code] 🔄 Attempt {attempt}/{MAX_BUILD_ATTEMPTS}")
+            if player:
+                player.write_log(f"[Code] Attempt {attempt}...")
+
+            last_output = _run_file(written_path, args, timeout, skip_gate=True)
+
+            if not _has_error(last_output):
+                msg = (
+                    f"Build complete, sir. "
+                    f"The code is working after {attempt} attempt{'s' if attempt > 1 else ''}. "
+                    f"Saved to {written_path}."
+                )
+                if speak: speak(msg)
+                return f"{msg}\n\nOutput:\n{last_output}"
+
+            print(f"[Code] ⚠️ Error on attempt {attempt}, fixing...")
+            if player:
+                player.write_log(f"[Code] Fixing (attempt {attempt})...")
+
+            try:
+                code = _fix_code(code, last_output, description)
+                _save_file(written_path, code)
+                if not written_path.exists() or written_path.read_text(encoding="utf-8") != code:
+                    return f"Post-write verification failed on attempt {attempt}: {written_path} content mismatch."
+            except Exception as e:
+                msg = f"Could not fix code on attempt {attempt}: {e}"
+                if speak: speak(msg)
+                return msg
+
+        msg = (
+            f"I was unable to build a working version after {MAX_BUILD_ATTEMPTS} attempts, sir. "
+            f"The last error was: {last_output[:200]}"
+        )
+        if speak: speak(msg)
+        return f"{msg}\n\nLast code saved to: {written_path}"
+
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+    return confirm.request(
+        key="code_helper_build",
+        title=f"Build & Run Code: {path.name}",
+        detail=f"Language: {lang}\nGoal: {description}\nTarget path: {path}\nExecution command: {cmd_str}",
+        run=_execute_build,
     )
-    if speak: speak(msg)
-    return f"{msg}\n\nLast code saved to: {path}"
 
 def _write_action(description, language, output_path, player) -> str:
     if not description:
@@ -320,6 +376,8 @@ def _edit_action(file_path, instruction, player) -> str:
     if err:
         return err
 
+    target_path = Path(file_path).resolve()
+
     if player:
         player.write_log("[Code] Editing file...")
 
@@ -341,9 +399,30 @@ Updated code:"""
     except Exception as e:
         return f"Could not edit code: {e}"
 
-    status = _save_file(Path(file_path), edited)
-    print(f"[Code] ✅ Edited: {file_path}")
-    return f"File edited. {status}\n\nPreview:\n{_preview(edited)}"
+    orig_lines = len(content.splitlines())
+    new_lines = len(edited.splitlines())
+    diff_summary = f"Original lines: {orig_lines} → Proposed lines: {new_lines}"
+
+    def _execute():
+        status = _save_file(target_path, edited)
+        if not target_path.exists() or target_path.read_text(encoding="utf-8") != edited:
+            return f"Post-write verification failed: {target_path} content does not match expected output."
+        print(f"[Code] ✅ Edited: {target_path}")
+        return f"File edited. {status}\n\nPreview:\n{_preview(edited)}"
+
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+    return confirm.request(
+        key="code_helper_edit",
+        title=f"Edit Code File: {target_path.name}",
+        detail=(
+            f"File: {target_path}\n"
+            f"Instruction: {instruction}\n"
+            f"{diff_summary}\n\n"
+            f"Preview of proposed changes:\n{_preview(edited, lines=15)}"
+        ),
+        run=_execute,
+    )
 
 
 def _explain_action(file_path, code, player) -> str:
@@ -386,7 +465,6 @@ def _run_action(file_path, args, timeout, player) -> str:
 
 
 def _optimize_action(file_path, code, language, output_path, player) -> str:
-
     if file_path and not code:
         code, err = _read_file(file_path)
         if err:
@@ -420,24 +498,50 @@ Optimized code:"""
     except Exception as e:
         return f"Could not optimize code: {e}"
 
-    # Kaydet
     if file_path:
-        save_path = Path(file_path)
+        save_path = Path(file_path).resolve()
     else:
-        save_path = _resolve_save_path(output_path, lang)
-
-    status = _save_file(save_path, optimized)
-    print(f"[Code] ✅ Optimized: {save_path}")
+        save_path = _resolve_save_path(output_path, lang).resolve()
 
     original_lines  = len(code.splitlines())
     optimized_lines = len(optimized.splitlines())
     diff = original_lines - optimized_lines
 
-    return (
-        f"Code optimized. {status}\n"
-        f"Lines: {original_lines} → {optimized_lines} "
-        f"({'−' if diff > 0 else '+'}{abs(diff)} lines)\n\n"
-        f"Preview:\n{_preview(optimized)}"
+    def _execute():
+        if file_path and save_path.exists():
+            try:
+                current_on_disk = save_path.read_text(encoding="utf-8")
+                if current_on_disk != code:
+                    return (
+                        f"Aborted write: {save_path.name} was modified externally after optimization "
+                        f"was planned. Please review the updated file and retry."
+                    )
+            except Exception as e:
+                return f"Could not verify file before writing: {e}"
+
+        status = _save_file(save_path, optimized)
+        if not save_path.exists() or save_path.read_text(encoding="utf-8") != optimized:
+            return f"Post-write verification failed: {save_path} content does not match expected output."
+        print(f"[Code] ✅ Optimized: {save_path}")
+        return (
+            f"Code optimized. {status}\n"
+            f"Lines: {original_lines} → {optimized_lines} "
+            f"({'−' if diff > 0 else '+'}{abs(diff)} lines)\n\n"
+            f"Preview:\n{_preview(optimized)}"
+        )
+
+
+    if confirm.pending_title():
+        return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+    return confirm.request(
+        key="code_helper_optimize",
+        title=f"Optimize Code File: {save_path.name}",
+        detail=(
+            f"File: {save_path}\n"
+            f"Lines: {original_lines} → {optimized_lines} ({'−' if diff > 0 else '+'}{abs(diff)} lines)\n\n"
+            f"Preview of optimized code:\n{_preview(optimized, lines=15)}"
+        ),
+        run=_execute,
     )
 
 
@@ -502,14 +606,30 @@ Be specific and actionable. If you see an error message, quote it exactly."""
             pass
 
         if file_path and file_content:
-
             code_match = re.search(r"```[a-zA-Z]*\n(.*?)```", analysis, re.DOTALL)
             if code_match:
                 fixed_code = code_match.group(1).strip()
-                save_path  = Path(file_path)
-                _save_file(save_path, fixed_code)
-                analysis += f"\n\n✅ Fixed code has been saved to: {file_path}"
-                print(f"[Code] ✅ Fixed code saved: {file_path}")
+                target_path = Path(file_path).resolve()
+
+                def _execute():
+                    status = _save_file(target_path, fixed_code)
+                    if not target_path.exists() or target_path.read_text(encoding="utf-8") != fixed_code:
+                        return f"Post-write verification failed: {target_path} content does not match expected fix."
+                    print(f"[Code] ✅ Fixed code saved: {target_path}")
+                    return f"{analysis}\n\n✅ Fixed code has been saved to: {target_path}"
+
+                if confirm.pending_title():
+                    return "There is already a confirmation waiting on screen. Ask the user to answer that one first."
+                return confirm.request(
+                    key="code_helper_screen_debug",
+                    title=f"Apply Screen Debug Fix: {target_path.name}",
+                    detail=(
+                        f"File: {target_path}\n"
+                        f"Problem: {user_question}\n\n"
+                        f"Proposed Fix Preview:\n{_preview(fixed_code, lines=15)}"
+                    ),
+                    run=_execute,
+                )
 
         return analysis
 
@@ -586,48 +706,62 @@ def code_helper(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "code_helper",
-    "description": "Writes, edits, explains, runs, or builds code files.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "write | edit | explain | run | build | auto (default: auto)"
+class CodeHelperTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "code_helper"
+
+    @property
+    def description(self) -> str:
+        return "Writes, edits, explains, runs, or builds code files."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "write | edit | explain | run | build | auto (default: auto)"
+                },
+                "description": {
+                    "type": "STRING",
+                    "description": "What the code should do or what change to make"
+                },
+                "language": {
+                    "type": "STRING",
+                    "description": "Programming language (default: python)"
+                },
+                "output_path": {
+                    "type": "STRING",
+                    "description": "Where to save the file"
+                },
+                "file_path": {
+                    "type": "STRING",
+                    "description": "Path to existing file for edit/explain/run/build"
+                },
+                "code": {
+                    "type": "STRING",
+                    "description": "Raw code string for explain"
+                },
+                "args": {
+                    "type": "STRING",
+                    "description": "CLI arguments for run/build"
+                },
+                "timeout": {
+                    "type": "INTEGER",
+                    "description": "Execution timeout in seconds (default: 30)"
+                }
             },
-            "description": {
-                "type": "STRING",
-                "description": "What the code should do or what change to make"
-            },
-            "language": {
-                "type": "STRING",
-                "description": "Programming language (default: python)"
-            },
-            "output_path": {
-                "type": "STRING",
-                "description": "Where to save the file"
-            },
-            "file_path": {
-                "type": "STRING",
-                "description": "Path to existing file for edit/explain/run/build"
-            },
-            "code": {
-                "type": "STRING",
-                "description": "Raw code string for explain"
-            },
-            "args": {
-                "type": "STRING",
-                "description": "CLI arguments for run/build"
-            },
-            "timeout": {
-                "type": "INTEGER",
-                "description": "Execution timeout in seconds (default: 30)"
-            }
-        },
-        "required": [
-            "action"
-        ]
-    },
-    "handler": code_helper,
-}
+            "required": [
+                "action"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return code_helper(parameters=parameters, **context)
+
+
+ACTION = CodeHelperTool()
+TOOL = ACTION.to_tool_dict()
+

@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import dateutil.parser
 
+from core.tool import AgentTool, ToolResult
+
 _CNW: dict = (
     {"creationflags": subprocess.CREATE_NO_WINDOW}
     if platform.system() == "Windows" else {}
@@ -878,56 +880,69 @@ def reminder(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "reminder",
-    "description": (
-        "Manages reminders with local JSON storage and OS Task Scheduler. "
-        "Supports relative time (e.g. 'in 30 minutes', 'tomorrow at 9 AM'), "
-        "recurrence (daily, weekly), and full CRUD operations: "
-        "create, list, update, and delete."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": (
-                    "CRUD action to perform: "
-                    "create (set a new reminder) | "
-                    "list (view pending/existing reminders) | "
-                    "update (change reminder time/message by ID) | "
-                    "delete (remove reminder and un-schedule task by ID)"
-                ),
+class ReminderTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "reminder"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Manages reminders with local JSON storage and OS Task Scheduler. "
+            "Supports relative time (e.g. 'in 30 minutes', 'tomorrow at 9 AM'), "
+            "recurrence (daily, weekly), and full CRUD operations: "
+            "create, list, update, and delete."
+        )
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": (
+                        "CRUD action to perform: "
+                        "create (set a new reminder) | "
+                        "list (view pending/existing reminders) | "
+                        "update (change reminder time/message by ID) | "
+                        "delete (remove reminder and un-schedule task by ID)"
+                    ),
+                },
+                "id": {
+                    "type": "STRING",
+                    "description": "Unique reminder ID (e.g. 'rem_...') for update or delete actions.",
+                },
+                "message": {
+                    "type": "STRING",
+                    "description": "Reminder text or notification message.",
+                },
+                "time": {
+                    "type": "STRING",
+                    "description": (
+                        "Target time or relative offset. Examples: "
+                        "'in 20 minutes', 'in 2 hours', '09:00', '9 AM', '17:30', '5:30 PM'."
+                    ),
+                },
+                "date": {
+                    "type": "STRING",
+                    "description": "Date for reminder. Examples: 'tomorrow', 'today', '2026-09-26'.",
+                },
+                "recurrence": {
+                    "type": "STRING",
+                    "description": "Recurrence pattern: 'daily' or 'weekly:DayName' (e.g. 'weekly:Monday').",
+                },
+                "status": {
+                    "type": "STRING",
+                    "description": "Filter for list action: 'all', 'pending', or 'cancelled'.",
+                },
             },
-            "id": {
-                "type": "STRING",
-                "description": "Unique reminder ID (e.g. 'rem_...') for update or delete actions.",
-            },
-            "message": {
-                "type": "STRING",
-                "description": "Reminder text or notification message.",
-            },
-            "time": {
-                "type": "STRING",
-                "description": (
-                    "Target time or relative offset. Examples: "
-                    "'in 20 minutes', 'in 2 hours', '09:00', '9 AM', '17:30', '5:30 PM'."
-                ),
-            },
-            "date": {
-                "type": "STRING",
-                "description": "Date for reminder. Examples: 'tomorrow', 'today', '2026-09-26'.",
-            },
-            "recurrence": {
-                "type": "STRING",
-                "description": "Recurrence pattern: 'daily' or 'weekly:DayName' (e.g. 'weekly:Monday').",
-            },
-            "status": {
-                "type": "STRING",
-                "description": "Filter for list action: 'all', 'pending', or 'cancelled'.",
-            },
-        },
-        "required": [],
-    },
-    "handler": reminder,
-}
+            "required": [],
+        }
+
+    def execute(self, parameters: dict = None, **context):
+        return reminder(parameters=parameters, **context)
+
+
+ACTION = ReminderTool()
+TOOL = ACTION.to_tool_dict()

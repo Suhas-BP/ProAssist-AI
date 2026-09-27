@@ -52,6 +52,18 @@ TEST_SUITES = [
     ("Sub-Phase 5B: PlanExecutor Execution Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_orchestrator_execution.py"]),
     # Sub-Phase 5C: Live Integration & Voice Loop Wiring
     ("Sub-Phase 5C: Live Integration Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_subphase_5c_integration.py"]),
+    # Section 17 Stage 1: AgentTool AST & Dual Discovery Suite
+    ("Section 17: AgentTool AST & Dual Discovery", [sys.executable, "-m", "pytest", "-v", "scratch/test_agent_tool_ast_regression.py"]),
+    # Audit Gap Closure: Code Helper Security Gates & AgentTool
+    ("Code Helper Security Gates & AgentTool", [sys.executable, "-m", "pytest", "-v", "scratch/test_code_helper_gates.py"]),
+    # Section 17: Dev Agent Smoke Suite
+    ("Section 17: Dev Agent Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_dev_agent_smoke.py"]),
+    # Section 17: Weather Report Smoke Suite
+    ("Section 17: Weather Report Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_weather_report_smoke.py"]),
+    # Section 17: YouTube Video Smoke Suite
+    ("Section 17: YouTube Video Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_youtube_video_smoke.py"]),
+    # Section 17: Web Search Smoke Suite
+    ("Section 17: Web Search Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_web_search_smoke.py"]),
 ]
 
 def main():
@@ -88,12 +100,12 @@ def main():
 
     overall_elapsed = time.time() - overall_start
 
-    print("\n" + "=" * 80)
-    print("REGRESSION SUMMARY ACROSS ALL 16 SUITES")
-    print("=" * 80)
-
     total_suites = len(results)
     passed_suites = sum(1 for _, p, _ in results if p)
+
+    print("\n" + "=" * 80)
+    print(f"REGRESSION SUMMARY ACROSS ALL {total_suites} SUITES")
+    print("=" * 80)
 
     for name, passed, elapsed in results:
         sym = "[PASS]" if passed else "[FAIL]"
@@ -105,7 +117,7 @@ def main():
     print("=" * 80)
 
     if passed_suites == total_suites:
-        print("ALL 16 TEST SUITES PASSED WITH 100% SUCCESS! ZERO REGRESSIONS!")
+        print(f"ALL {total_suites} TEST SUITES PASSED WITH 100% SUCCESS! ZERO REGRESSIONS!")
         return 0
     else:
         print("SOME TEST SUITES FAILED")

@@ -538,6 +538,37 @@ def test_8_fail_closed_on_detection_errors():
         print("  -> Proved: Detection failure safely fails CLOSED with confirmation prompt, zero ungated executions!")
 
 
+def test_9_agent_tool_context_and_signature_compatibility():
+    """Verify AgentTool export and context forwarding with all 4 _CTX_KEYS."""
+    from actions.browser_control import ACTION, TOOL
+    from core.tool import AgentTool
+    from core.action_loader import discover_actions
+
+    assert isinstance(ACTION, AgentTool), "ACTION must be an AgentTool subclass instance"
+    assert ACTION.name == "browser_control"
+    assert TOOL["name"] == "browser_control"
+    assert callable(TOOL["handler"])
+
+    # Representative context dict with all 4 _CTX_KEYS
+    full_ctx = {
+        "speak": lambda text: None,
+        "player": None,
+        "session_memory": None,
+        "response": None,
+    }
+
+    # Direct execution with all context kwargs
+    res_direct = ACTION.execute({"action": "list_browsers"}, **full_ctx)
+    assert isinstance(res_direct, str)
+    assert "active" in res_direct.lower() or "open browsers" in res_direct.lower()
+
+    # Execution via action_loader registry with context dict
+    reg = discover_actions(Path(__file__).resolve().parent.parent / "actions")
+    res_loader = reg.run("browser_control", {"action": "list_browsers"}, ctx=full_ctx)
+    assert isinstance(res_loader, str)
+    assert "active" in res_loader.lower() or "open browsers" in res_loader.lower()
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("RUNNING PHASE 2 ITEM 2: BROWSER CONTROL GATES SUITE")
@@ -551,6 +582,7 @@ if __name__ == "__main__":
     run_test("TEST 6: Policy Classification & verify_permission_gates Audit", test_6_policy_rules_and_static_audit)
     run_test("TEST 7: Order-Independent Rule Resolution (Part A)", test_7_order_independent_rule_resolution)
     run_test("TEST 8: Fail-Closed Behavior on Detection Errors (Part B)", test_8_fail_closed_on_detection_errors)
+    run_test("TEST 9: AgentTool Context & Signature Compatibility", test_9_agent_tool_context_and_signature_compatibility)
 
     print("\n" + "=" * 70)
     print("ALL BROWSER CONTROL GATE TESTS COMPLETED SUCCESSFULLY!")

@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 
+from core.tool import AgentTool, ToolResult
+
 # ── Console UTF-8 Reconfiguration ───────────────────────────────────────────
 for _stream in ("stdout", "stderr"):
     try:
@@ -549,24 +551,37 @@ def open_app(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "open_app",
-    "description": (
-        "Opens any installed desktop application or file with dynamic system app discovery "
-        "and post-launch lifecycle verification. Always call this tool when the user requests "
-        "to open, launch, or start an app or file."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "app_name": {
-                "type": "STRING",
-                "description": "Name of the application or file path (e.g. 'Chrome', 'Notepad', 'Calculator', 'report.pdf')",
-            }
-        },
-        "required": [
-            "app_name"
-        ],
-    },
-    "handler": open_app,
-}
+class OpenAppTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "open_app"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Opens any installed desktop application or file with dynamic system app discovery "
+            "and post-launch lifecycle verification. Always call this tool when the user requests "
+            "to open, launch, or start an app or file."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "app_name": {
+                    "type": "STRING",
+                    "description": "Name of the application or file path (e.g. 'Chrome', 'Notepad', 'Calculator', 'report.pdf')",
+                }
+            },
+            "required": [
+                "app_name"
+            ],
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Dict[str, Any]:
+        return open_app(parameters=parameters, **context)
+
+
+ACTION = OpenAppTool()
+TOOL = ACTION.to_tool_dict()

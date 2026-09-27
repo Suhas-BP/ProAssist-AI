@@ -9,6 +9,8 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 try:
     import pyautogui
@@ -446,34 +448,53 @@ def youtube_video(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "youtube_video",
-    "description": "Controls YouTube. Use for: playing videos, summarizing a video's content, getting video info, or showing trending videos.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "play | summarize | get_info | trending (default: play)"
+class YouTubeVideoTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "youtube_video"
+
+    @property
+    def description(self) -> str:
+        return "Controls YouTube. Use for: playing videos, summarizing a video's content, getting video info, or showing trending videos."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "play | summarize | get_info | trending (default: play)"
+                },
+                "query": {
+                    "type": "STRING",
+                    "description": "Search query for play action"
+                },
+                "save": {
+                    "type": "BOOLEAN",
+                    "description": "Save summary to Notepad (summarize only)"
+                },
+                "region": {
+                    "type": "STRING",
+                    "description": "Country code for trending e.g. TR, US"
+                },
+                "url": {
+                    "type": "STRING",
+                    "description": "Video URL for get_info action"
+                }
             },
-            "query": {
-                "type": "STRING",
-                "description": "Search query for play action"
-            },
-            "save": {
-                "type": "BOOLEAN",
-                "description": "Save summary to Notepad (summarize only)"
-            },
-            "region": {
-                "type": "STRING",
-                "description": "Country code for trending e.g. TR, US"
-            },
-            "url": {
-                "type": "STRING",
-                "description": "Video URL for get_info action"
-            }
-        },
-        "required": []
-    },
-    "handler": youtube_video,
-}
+            "required": []
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return youtube_video(
+            parameters=parameters or {},
+            response=context.get("response"),
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+            speak=context.get("speak"),
+        )
+
+
+ACTION = YouTubeVideoTool()
+TOOL = ACTION.to_tool_dict()

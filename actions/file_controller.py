@@ -12,6 +12,8 @@ except ImportError:
     _SEND2TRASH = False
 
 from core.undo import push_undo
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
@@ -1197,52 +1199,70 @@ def file_controller(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "file_controller",
-    "description": "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, organize.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "list | create_file | create_folder | delete | move | bulk_move | copy | rename | bulk_rename | read | write | find | largest | disk_usage | organize | organize_desktop | info"
+class FileControllerTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "file_controller"
+
+    @property
+    def description(self) -> str:
+        return "Manages files and folders: list, create, delete, move, copy, rename, read, write, find, disk usage, organize."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "list | create_file | create_folder | delete | move | bulk_move | copy | rename | bulk_rename | read | write | find | largest | disk_usage | organize | organize_desktop | info"
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "File/folder path or shortcut: desktop, downloads, documents, home"
+                },
+                "destination": {
+                    "type": "STRING",
+                    "description": "Destination path for move/copy/organize"
+                },
+                "new_name": {
+                    "type": "STRING",
+                    "description": "New name for rename"
+                },
+                "content": {
+                    "type": "STRING",
+                    "description": "Content for create_file/write"
+                },
+                "name": {
+                    "type": "STRING",
+                    "description": "File name to search for"
+                },
+                "extension": {
+                    "type": "STRING",
+                    "description": "File extension to search or filter (e.g. .pdf)"
+                },
+                "count": {
+                    "type": "INTEGER",
+                    "description": "Number of results for largest"
+                },
+                "task": {
+                    "type": "STRING",
+                    "description": "Natural language task (e.g. 'put all my PDFs from Downloads into a folder called College')"
+                }
             },
-            "path": {
-                "type": "STRING",
-                "description": "File/folder path or shortcut: desktop, downloads, documents, home"
-            },
-            "destination": {
-                "type": "STRING",
-                "description": "Destination path for move/copy/organize"
-            },
-            "new_name": {
-                "type": "STRING",
-                "description": "New name for rename"
-            },
-            "content": {
-                "type": "STRING",
-                "description": "Content for create_file/write"
-            },
-            "name": {
-                "type": "STRING",
-                "description": "File name to search for"
-            },
-            "extension": {
-                "type": "STRING",
-                "description": "File extension to search or filter (e.g. .pdf)"
-            },
-            "count": {
-                "type": "INTEGER",
-                "description": "Number of results for largest"
-            },
-            "task": {
-                "type": "STRING",
-                "description": "Natural language task (e.g. 'put all my PDFs from Downloads into a folder called College')"
-            }
-        },
-        "required": [
-            "action"
-        ]
-    },
-    "handler": file_controller,
-}
+            "required": [
+                "action"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return file_controller(
+            parameters=parameters,
+            response=context.get("response"),
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+        )
+
+
+ACTION = FileControllerTool()
+TOOL = ACTION.to_tool_dict()

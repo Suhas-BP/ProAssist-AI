@@ -101,7 +101,10 @@ class ActionRegistry:
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
         try:
-            return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
+            res = _call_handler(rec.handler, parameters, ctx or {})
+            if res is None:
+                return "Done."
+            return str(res) if not isinstance(res, str) else res
         except Exception as e:
             self._logger(f"Action '{name}' crashed during run(): {e}")
             traceback.print_exc()
@@ -123,10 +126,33 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
 
 def _validate(module, filename: str) -> ActionRecord:
     """Returns an ActionRecord; .valid=False + .error set on any problem. Never raises."""
-    tool = getattr(module, "TOOL", None)
-    if not isinstance(tool, dict):
+    raw_tool = getattr(module, "TOOL", None)
+    if raw_tool is None:
+        raw_tool = getattr(module, "ACTION", None)
+
+    if raw_tool is None:
         return ActionRecord(name=Path(filename).stem, file=filename,
-                            error="No module-level TOOL dict (not a discoverable action).")
+                            error="No module-level TOOL or ACTION declaration (not a discoverable action).")
+
+    # Bridge: if raw_tool is an AgentTool subclass, instantiate it; if instance, call to_tool_dict()
+    if isinstance(raw_tool, type) and hasattr(raw_tool, "to_tool_dict"):
+        try:
+            raw_tool = raw_tool()
+        except Exception as e:
+            return ActionRecord(name=Path(filename).stem, file=filename,
+                                error=f"Failed to instantiate AgentTool class: {e}")
+
+    if hasattr(raw_tool, "to_tool_dict") and callable(raw_tool.to_tool_dict):
+        try:
+            tool = raw_tool.to_tool_dict()
+        except Exception as e:
+            return ActionRecord(name=Path(filename).stem, file=filename,
+                                error=f"to_tool_dict() failed: {e}")
+    elif isinstance(raw_tool, dict):
+        tool = raw_tool
+    else:
+        return ActionRecord(name=Path(filename).stem, file=filename,
+                            error="TOOL/ACTION must be a dict or an AgentTool instance.")
 
     name = tool.get("name")
     if not isinstance(name, str) or not _NAME_RE.match(name):
@@ -189,7 +215,7 @@ def discover_actions(actions_dir: Path, reserved_names: set[str] | None = None,
                     sys.modules.pop(module_name, None)
                     raise
 
-            if getattr(module, "TOOL", None) is None:
+            if getattr(module, "TOOL", None) is None and getattr(module, "ACTION", None) is None:
                 continue   # not an action file — a helper/capture-only module
 
             rec = _validate(module, path.name)

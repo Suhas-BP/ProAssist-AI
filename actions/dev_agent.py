@@ -6,6 +6,8 @@ import time
 import shutil
 import platform
 from pathlib import Path
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 
 def get_base_dir():
@@ -775,32 +777,46 @@ def dev_agent(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "dev_agent",
-    "description": "Builds complete multi-file projects from scratch: plans, writes files, installs deps, opens VSCode, runs and fixes errors.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "description": {
-                "type": "STRING",
-                "description": "What the project should do"
+class DevAgentTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "dev_agent"
+
+    @property
+    def description(self) -> str:
+        return "Builds complete multi-file projects from scratch: plans, writes files, installs deps, opens VSCode, runs and fixes errors."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "description": {
+                    "type": "STRING",
+                    "description": "What the project should do"
+                },
+                "language": {
+                    "type": "STRING",
+                    "description": "Programming language (default: python)"
+                },
+                "project_name": {
+                    "type": "STRING",
+                    "description": "Optional project folder name"
+                },
+                "timeout": {
+                    "type": "INTEGER",
+                    "description": "Run timeout in seconds (default: 30)"
+                }
             },
-            "language": {
-                "type": "STRING",
-                "description": "Programming language (default: python)"
-            },
-            "project_name": {
-                "type": "STRING",
-                "description": "Optional project folder name"
-            },
-            "timeout": {
-                "type": "INTEGER",
-                "description": "Run timeout in seconds (default: 30)"
-            }
-        },
-        "required": [
-            "description"
-        ]
-    },
-    "handler": dev_agent,
-}
+            "required": [
+                "description"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return dev_agent(parameters=parameters, **context)
+
+
+ACTION = DevAgentTool()
+TOOL = ACTION.to_tool_dict()
+

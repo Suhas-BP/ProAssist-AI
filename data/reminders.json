@@ -1,0 +1,15 @@
+{
+  "reminders": [
+    {
+      "id": "rem_20260925_185928_6f46",
+      "message": "Reminder",
+      "original_text": "Reminder",
+      "target_time": "2027-08-10T09:00:00",
+      "target_time_friendly": "August 10 at 09:00 AM",
+      "recurrence": null,
+      "task_name": "AGENTReminder_20260925_185928_6f46",
+      "status": "pending",
+      "created_at": "2026-09-25T18:59:28.199945"
+    }
+  ]
+}

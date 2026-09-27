@@ -8,6 +8,8 @@ import tempfile
 import platform
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 try:
     import pyautogui
@@ -761,36 +763,50 @@ def desktop_control(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "desktop_control",
-    "description": "Controls the desktop: wallpaper, organize, clean, list, stats.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "wallpaper | wallpaper_url | organize | clean | list | stats | task"
+class DesktopTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "desktop_control"
+
+    @property
+    def description(self) -> str:
+        return "Controls the desktop: wallpaper, organize, clean, list, stats."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "wallpaper | wallpaper_url | organize | clean | list | stats | task"
+                },
+                "path": {
+                    "type": "STRING",
+                    "description": "Image path for wallpaper"
+                },
+                "url": {
+                    "type": "STRING",
+                    "description": "Image URL for wallpaper_url"
+                },
+                "mode": {
+                    "type": "STRING",
+                    "description": "by_type or by_date for organize"
+                },
+                "task": {
+                    "type": "STRING",
+                    "description": "Natural language desktop task"
+                }
             },
-            "path": {
-                "type": "STRING",
-                "description": "Image path for wallpaper"
-            },
-            "url": {
-                "type": "STRING",
-                "description": "Image URL for wallpaper_url"
-            },
-            "mode": {
-                "type": "STRING",
-                "description": "by_type or by_date for organize"
-            },
-            "task": {
-                "type": "STRING",
-                "description": "Natural language desktop task"
-            }
-        },
-        "required": [
-            "action"
-        ]
-    },
-    "handler": desktop_control,
-}
+            "required": [
+                "action"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return desktop_control(parameters=parameters, **context)
+
+
+ACTION = DesktopTool()
+TOOL = ACTION.to_tool_dict()
+

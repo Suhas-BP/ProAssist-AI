@@ -1,5 +1,7 @@
 import webbrowser
 from urllib.parse import quote_plus
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 
 def weather_action(
@@ -52,20 +54,37 @@ def _log(message: str, player=None) -> None:
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "weather_report",
-    "description": "Gives the weather report to user",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "city": {
-                "type": "STRING",
-                "description": "City name"
-            }
-        },
-        "required": [
-            "city"
-        ]
-    },
-    "handler": weather_action,
-}
+class WeatherReportTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "weather_report"
+
+    @property
+    def description(self) -> str:
+        return "Gives the weather report to user"
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "city": {
+                    "type": "STRING",
+                    "description": "City name"
+                }
+            },
+            "required": [
+                "city"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return weather_action(
+            parameters=parameters or {},
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+        )
+
+
+ACTION = WeatherReportTool()
+TOOL = ACTION.to_tool_dict()

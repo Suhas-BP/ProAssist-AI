@@ -8,6 +8,8 @@ import time
 
 import psutil
 
+from core.tool import AgentTool, ToolResult
+
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
 DEFAULT_THRESHOLDS = {
@@ -553,35 +555,48 @@ def system_monitor(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "system_monitor",
-    "description": (
-        "Inspects system performance, resource usage, and health metrics: "
-        "CPU, RAM, GPU, temperature, disk usage, network throughput, battery status, "
-        "and top resource-consuming processes. Includes 'diagnose' action for answering "
-        "'why is my computer slow?'."
-    ),
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": (
-                    "Monitoring action to perform: "
-                    "status (overall system snapshot) | "
-                    "diagnose (analyze bottlenecks / why computer is slow) | "
-                    "processes (top CPU and memory consuming processes) | "
-                    "disk (disk drive usage and capacity) | "
-                    "network (current network throughput rates)"
-                ),
+class SystemMonitorTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "system_monitor"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Inspects system performance, resource usage, and health metrics: "
+            "CPU, RAM, GPU, temperature, disk usage, network throughput, battery status, "
+            "and top resource-consuming processes. Includes 'diagnose' action for answering "
+            "'why is my computer slow?'."
+        )
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": (
+                        "Monitoring action to perform: "
+                        "status (overall system snapshot) | "
+                        "diagnose (analyze bottlenecks / why computer is slow) | "
+                        "processes (top CPU and memory consuming processes) | "
+                        "disk (disk drive usage and capacity) | "
+                        "network (current network throughput rates)"
+                    ),
+                },
+                "n": {
+                    "type": "INTEGER",
+                    "description": "Number of top processes to return (default: 5).",
+                },
             },
-            "n": {
-                "type": "INTEGER",
-                "description": "Number of top processes to return (default: 5).",
-            },
-        },
-        "required": [],
-    },
-    "handler": system_monitor,
-}
+            "required": [],
+        }
+
+    def execute(self, parameters: dict = None, **context):
+        return system_monitor(parameters=parameters, **context)
+
+
+ACTION = SystemMonitorTool()
+TOOL = ACTION.to_tool_dict()
 

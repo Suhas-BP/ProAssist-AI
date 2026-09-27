@@ -14,6 +14,7 @@ from enum import Enum
 import inspect
 import re
 import sys
+import textwrap
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 
@@ -64,7 +65,17 @@ _BLOCKED_DESKTOP_PATTERNS = [
 
 
 def _is_blocked_command(params: Dict[str, Any]) -> bool:
-    cmd = str(params.get("command") or params.get("cmd") or params.get("description") or "").strip()
+    raw_args = params.get("args") or ""
+    if isinstance(raw_args, list):
+        raw_args = " ".join(str(a) for a in raw_args)
+    cmd = str(
+        params.get("command")
+        or params.get("cmd")
+        or params.get("description")
+        or raw_args
+        or params.get("file_path")
+        or ""
+    ).strip()
     return any(p.search(cmd) for p in _BLOCKED_COMMAND_PATTERNS)
 
 
@@ -189,6 +200,73 @@ POLICY_RULES: List[PolicyRule] = [
         level=PermissionLevel.CONFIRM,
         reason="Development agent autonomous build and execution requires confirmation",
         key="dev_agent_build",
+    ),
+
+    # ── Section 15: code_helper (Gated code manipulation & execution) ─────────
+    PolicyRule(
+        tool="code_helper",
+        action="edit",
+        level=PermissionLevel.STRONG_CONFIRM,
+        reason="Editing and modifying existing code files requires strong confirmation",
+        key="code_helper_edit",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="screen_debug",
+        level=PermissionLevel.STRONG_CONFIRM,
+        reason="Applying screen-debug code fixes to files requires strong confirmation",
+        key="code_helper_screen_debug",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="optimize",
+        level=PermissionLevel.STRONG_CONFIRM,
+        reason="Optimizing and modifying code files requires strong confirmation",
+        key="code_helper_optimize",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="run",
+        level=PermissionLevel.BLOCKED,
+        reason="Prohibited dangerous command pattern detected in code execution",
+        key="code_helper_run_blocked",
+        condition=_is_blocked_command,
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="run",
+        level=PermissionLevel.CONFIRM,
+        reason="Executing code files and shell interpreters requires confirmation",
+        key="code_helper_run",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="build",
+        level=PermissionLevel.BLOCKED,
+        reason="Prohibited dangerous command pattern detected in build command",
+        key="code_helper_build_blocked",
+        condition=_is_blocked_command,
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="build",
+        level=PermissionLevel.CONFIRM,
+        reason="Autonomous code building, execution, and error iteration requires confirmation",
+        key="code_helper_build",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="write",
+        level=PermissionLevel.SAFE,
+        reason="Generating new code files on Desktop is standard",
+        key="code_helper_write",
+    ),
+    PolicyRule(
+        tool="code_helper",
+        action="explain",
+        level=PermissionLevel.SAFE,
+        reason="Explaining code is read-only",
+        key="code_helper_explain",
     ),
 
     # ── Item 1: desktop.execute_generated_code (BLOCKED or Level 2: STRONG_CONFIRM) ──
@@ -545,9 +623,15 @@ def check_permission(
     Returns a PermissionDecision tuple with (level, reason, description, key).
     Unclassified tools or actions default to PermissionLevel.SAFE.
     """
+    if isinstance(action, dict) and params is None:
+        params = action
+        action = str(params.get("action") or "").strip().lower()
+
     p = params or {}
     t_name = str(tool_name or "").strip().lower()
     a_name = str(action or "").strip().lower()
+    if not a_name and p.get("action"):
+        a_name = str(p.get("action") or "").strip().lower()
 
     # Normalize dot-syntax (e.g. desktop.execute_generated_code -> desktop, execute_generated_code)
     if "." in t_name and not a_name:
@@ -632,7 +716,7 @@ def has_confirm_gate(func: Callable, visited: Optional[set] = None) -> bool:
     visited.add(func)
 
     try:
-        src = inspect.getsource(func)
+        src = textwrap.dedent(inspect.getsource(func))
     except Exception:
         return False
 
@@ -674,7 +758,7 @@ def get_confirm_keys(func: Callable, visited: Optional[set] = None) -> set[str]:
 
     found_keys: set[str] = set()
     try:
-        src = inspect.getsource(func)
+        src = textwrap.dedent(inspect.getsource(func))
         tree = ast.parse(src)
     except Exception:
         return found_keys
@@ -720,11 +804,27 @@ def resolve_action_handler(top_handler: Callable, action_name: Optional[str]) ->
     Given a top-level tool handler and an action name, resolve the exact
     sub-function or worker function that will execute for that action.
     """
+    # 0. If top_handler is a delegating wrapper (e.g. AgentTool.execute -> desktop_control), unwrap it
+    try:
+        src = textwrap.dedent(inspect.getsource(top_handler))
+        tree = ast.parse(src)
+        func_def = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+        returns = [n for n in func_def.body if isinstance(n, ast.Return)]
+        if len(returns) == 1 and isinstance(returns[0].value, ast.Call) and isinstance(returns[0].value.func, ast.Name):
+            fname = returns[0].value.func.id
+            mod = sys.modules.get(top_handler.__module__)
+            if mod and hasattr(mod, fname):
+                delegated = getattr(mod, fname)
+                if callable(delegated) and delegated != top_handler:
+                    top_handler = delegated
+    except Exception:
+        pass
+
     if not action_name:
         # Check if the top-level handler delegates unconditionally to a worker function
         # e.g. dev_agent(parameters, ...) -> return _build_project(...)
         try:
-            src = inspect.getsource(top_handler)
+            src = textwrap.dedent(inspect.getsource(top_handler))
             tree = ast.parse(src)
             func_def = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
             mod = sys.modules.get(top_handler.__module__)
@@ -747,7 +847,7 @@ def resolve_action_handler(top_handler: Callable, action_name: Optional[str]) ->
 
     # 1. Inspect top_handler AST for branching on action == act
     try:
-        src = inspect.getsource(top_handler)
+        src = textwrap.dedent(inspect.getsource(top_handler))
         tree = ast.parse(src)
         func_def = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
         for node in ast.walk(func_def):
@@ -775,9 +875,13 @@ def resolve_action_handler(top_handler: Callable, action_name: Optional[str]) ->
 
     # 2. Check direct function naming match in the module
     # e.g. 'delete' -> delete_file, 'install_dependencies' -> _install_dependencies
-    for candidate in [act, f"_{act}", f"{act}_file", f"_{act}_file", "execute_generated_code", "_execute_generated_code"]:
+    candidates = [act, f"_{act}", f"{act}_file", f"_{act}_file", f"{act}_desktop", f"_{act}_desktop"]
+    if "execute" in act or "code" in act:
+        candidates.extend(["execute_generated_code", "_execute_generated_code"])
+    for candidate in candidates:
         if mod and hasattr(mod, candidate) and callable(getattr(mod, candidate)):
             return getattr(mod, candidate)
+
 
     return top_handler
 
