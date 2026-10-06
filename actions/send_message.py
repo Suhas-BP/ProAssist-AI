@@ -3,6 +3,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 try:
     import pyautogui
@@ -389,30 +391,48 @@ def send_message(
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "send_message",
-    "description": "Sends a text message via WhatsApp, Telegram, or other messaging platform.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "receiver": {
-                "type": "STRING",
-                "description": "Recipient contact name"
+class SendMessageTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "send_message"
+
+    @property
+    def description(self) -> str:
+        return "Sends a text message via WhatsApp, Telegram, or other messaging platform."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "receiver": {
+                    "type": "STRING",
+                    "description": "Recipient contact name"
+                },
+                "message_text": {
+                    "type": "STRING",
+                    "description": "The message to send"
+                },
+                "platform": {
+                    "type": "STRING",
+                    "description": "Platform: WhatsApp, Telegram, etc."
+                }
             },
-            "message_text": {
-                "type": "STRING",
-                "description": "The message to send"
-            },
-            "platform": {
-                "type": "STRING",
-                "description": "Platform: WhatsApp, Telegram, etc."
-            }
-        },
-        "required": [
-            "receiver",
-            "message_text",
-            "platform"
-        ]
-    },
-    "handler": send_message,
-}
+            "required": [
+                "receiver",
+                "message_text",
+                "platform"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return send_message(
+            parameters=parameters or {},
+            response=context.get("response"),
+            player=context.get("player"),
+            session_memory=context.get("session_memory"),
+        )
+
+
+ACTION = SendMessageTool()
+TOOL = ACTION.to_tool_dict()

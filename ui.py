@@ -3378,6 +3378,7 @@ class MainWindow(QMainWindow):
     _quiz_sig       = pyqtSignal(str, object, object)  # (topic, questions, grader)
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
+    _phone_mic_sig  = pyqtSignal(bool)                      # phone mic live indicator
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3480,6 +3481,21 @@ class MainWindow(QMainWindow):
             }}
         """)
         pill_row.addWidget(self._status_pill)
+
+        self._phone_mic_pill = QLabel("📱 Phone mic live")
+        self._phone_mic_pill.setFont(_app_font(8.5, bold=True))
+        self._phone_mic_pill.setStyleSheet("""
+            QLabel {
+                color: #5b9dff;
+                background: #0f1c2e;
+                border: 1px solid #1e3a5f;
+                border-radius: 12px;
+                padding: 4px 12px;
+            }
+        """)
+        self._phone_mic_pill.setVisible(False)
+        pill_row.addWidget(self._phone_mic_pill)
+
         pill_row.addStretch()
         hud_box.addLayout(pill_row)
 
@@ -3584,6 +3600,7 @@ class MainWindow(QMainWindow):
         self._quiz_sig.connect(self._show_quiz)
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
+        self._phone_mic_sig.connect(self._set_phone_mic_pill_visible)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -6005,6 +6022,16 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_floating_island") and self._floating_island:
             self._floating_island.on_state_changed(state)
 
+    def _set_phone_mic_pill_visible(self, visible: bool):
+        if hasattr(self, "_phone_mic_pill") and self._phone_mic_pill:
+            self._phone_mic_pill.setVisible(bool(visible))
+
+    def set_phone_mic_active(self, active: bool):
+        if hasattr(self, "_phone_mic_sig"):
+            self._phone_mic_sig.emit(bool(active))
+        elif hasattr(self, "_phone_mic_pill") and self._phone_mic_pill:
+            self._phone_mic_pill.setVisible(bool(active))
+
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False
         try:
@@ -6235,6 +6262,10 @@ class AgentUI:
 
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
+
+    def set_phone_mic_active(self, active: bool):
+        if self._win:
+            self._win.set_phone_mic_active(active)
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

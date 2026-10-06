@@ -5,6 +5,8 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 from config import is_windows, is_mac, is_linux
 
@@ -360,46 +362,63 @@ def flight_finder(parameters: dict, player=None, speak=None) -> str:
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "flight_finder",
-    "description": "Searches Google Flights and speaks the best options.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "origin": {
-                "type": "STRING",
-                "description": "Departure city or airport code"
+class FlightFinderTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "flight_finder"
+
+    @property
+    def description(self) -> str:
+        return "Searches Google Flights and speaks the best options."
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "origin": {
+                    "type": "STRING",
+                    "description": "Departure city or airport code"
+                },
+                "destination": {
+                    "type": "STRING",
+                    "description": "Arrival city or airport code"
+                },
+                "date": {
+                    "type": "STRING",
+                    "description": "Departure date (any format)"
+                },
+                "return_date": {
+                    "type": "STRING",
+                    "description": "Return date for round trips"
+                },
+                "passengers": {
+                    "type": "INTEGER",
+                    "description": "Number of passengers (default: 1)"
+                },
+                "cabin": {
+                    "type": "STRING",
+                    "description": "economy | premium | business | first"
+                },
+                "save": {
+                    "type": "BOOLEAN",
+                    "description": "Save results to Notepad"
+                }
             },
-            "destination": {
-                "type": "STRING",
-                "description": "Arrival city or airport code"
-            },
-            "date": {
-                "type": "STRING",
-                "description": "Departure date (any format)"
-            },
-            "return_date": {
-                "type": "STRING",
-                "description": "Return date for round trips"
-            },
-            "passengers": {
-                "type": "INTEGER",
-                "description": "Number of passengers (default: 1)"
-            },
-            "cabin": {
-                "type": "STRING",
-                "description": "economy | premium | business | first"
-            },
-            "save": {
-                "type": "BOOLEAN",
-                "description": "Save results to Notepad"
-            }
-        },
-        "required": [
-            "origin",
-            "destination",
-            "date"
-        ]
-    },
-    "handler": flight_finder,
-}
+            "required": [
+                "origin",
+                "destination",
+                "date"
+            ]
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return flight_finder(
+            parameters=parameters or {},
+            player=context.get("player"),
+            speak=context.get("speak"),
+        )
+
+
+ACTION = FlightFinderTool()
+TOOL = ACTION.to_tool_dict()

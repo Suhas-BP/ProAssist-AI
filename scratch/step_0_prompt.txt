@@ -1,0 +1,186 @@
+<USER_REQUEST>
+CONSTRAINTS (do not violate):
+- Do NOT disturb, refactor, or rewrite any code already fixed and
+  verified in this session: core/permission_manager.py, core/confirm.py
+  usage, the confirm.request() gates inside
+  actions/desktop.py::_execute_generated_code,
+  actions/dev_agent.py::_run_project/_install_dependencies/
+  _try_auto_install, actions/file_controller.py::delete_file, the
+  WORKING state addition, or the Flag 1 click-accuracy fix. Treat all
+  of that as closed, stable infrastructure to build ON TOP OF, not
+  something to touch.
+- Do NOT recreate a second permission system. The spec below (section
+  18) asks for permissions/permission_manager.py + policies.py +
+  audit.py — we already decided to use core/permission_manager.py
+  instead, with a POLICY_RULES data structure and a
+  verify_permission_gates() startup audit. ANY new tool built under
+  this pass that needs CONFIRM/STRONG_CONFIRM/BLOCKED classification
+  MUST be added as a new POLICY_RULES entry in the EXISTING
+  core/permission_manager.py, and its handler function MUST contain a
+  real confirm.request() call so it passes verify_permission_gates()
+  automatically — do not invent a parallel mechanism.
+- Do NOT re-implement anything the earlier audit already found FULLY
+  or PARTIALLY working unless there's a specific, confirmed gap. Before
+  writing any new code for a section, first re-check the CURRENT state
+  of the relevant file (things may have shifted since the original
+  audit) and report what's already there vs. what's actually missing —
+  do not assume the original gap report is still 100% accurate this
+  many patches later.
+- Work through sections in the ORDER given in Phase 1/2/3 below. Do not
+  skip ahead or batch multiple sections into one diff. Show a diff +
+  test result for each section before moving to the next.
+- Every new/modified tool function must return the structured format
+  already established in this codebase where present (or the spec's
+  {"success", "tool", "action", "result", "error"} shape for genuinely
+  new tools) — do not introduce a third inconsistent return format.
+- Every new tool that performs a destructive, irreversible, financial,
+  credential-related, or system-modifying action must be classified in
+  POLICY_RULES at the appropriate level (SAFE/CONFIRM/STRONG_CONFIRM/
+  BLOCKED) and gated with confirm.request() BEFORE it is considered
+  done — this is not optional polish, it's required for every new tool
+  in this pass, following the exact pattern used in Items 1-4.
+- After each section, re-run the full existing regression suite
+  (Items 1-5 test suites) to confirm zero regressions, in addition to
+  new tests for the section just added.
+- Do not implement the startup-app / global-hotkey (Win+Ctrl+A) idea in
+  this pass — that remains explicitly deferred.
+
+═══════════════════════════════════════════
+PHASE 1 — Cheapest gaps to close (already partially built)
+═══════════════════════════════════════════
+Work through these first, in order. For each, re-verify current state
+against the spec section before writing code.
+
+1. Section 4 (Computer Settings): Add missing Bluetooth status query,
+   battery status/power info, and Wi-Fi status query (not just toggle)
+   to actions/computer_settings.py. Convert all return values to the
+   structured {"success", "action", "value", "message"} format
+   specified.
+2. Section 11 (System Monitor): Add disk usage, network throughput,
+   battery percentage, and top resource-consuming process listing to
+   actions/system_monitor.py. Implement the "why is my computer slow"
+   diagnostic flow: inspect CPU/RAM/disk/processes/network together and
+   produce a plain-language explanation grounded in the actual observed
+   numbers.
+3. Section 13 (Reminder System): Add relative timer support ("remind me
+   in 20 minutes"), recurring reminders (daily/weekly), and local
+   JSON-backed storage with list/update/delete operations to
+   actions/reminder.py.
+4. Section 9 (Application Control): Wire the EXISTING
+   discover_system_apps (primary/phase3/app_launcher.py) into
+   actions/open_app.py, replacing the hardcoded _APP_ALIASES dict and
+   blind Start-Menu keystroke typing. Add a lifecycle check after
+   launch (verify the process/window actually appeared) instead of a
+   blind sleep-then-return-True.
+
+Report each of the 4 items above individually with diff + test results
+before proceeding to Phase 2.
+
+═══════════════════════════════════════════
+PHASE 2 — Safety-relevant gaps still open from the original audit
+═══════════════════════════════════════════
+1. Section 5 (Desktop Control) — organize_desktop / clean_desktop bulk
+   confirmation: these were flagged HIGH severity in the original audit
+   (bulk file moves with zero confirmation) and are currently in
+   core/permission_manager.py's EXEMPT_DEFERRED_ACTIONS list. Add a
+   confirm.request() gate to both functions (STRONG_CONFIRM level,
+   showing the list of files and their source/destination), remove them
+   from EXEMPT_DEFERRED_ACTIONS once gated, and confirm
+   verify_permission_gates() now passes them without the exemption.
+2. Section 10 (Browser Control) — sensitive-action confirmation: add
+   detection for purchasing, sending messages/emails, posting publicly,
+   changing account settings, or entering payment info within
+   actions/browser_control.py's Playwright automation, and gate the
+   FINAL action (the actual submit/click) behind confirm.request()
+   before it fires. Also add Playwright download interception (missing
+   entirely per the original audit) and route any triggered download
+   through the same confirmation pattern used for Section 7 below.
+3. Section 7 (Download System) — this is currently MISSING ENTIRELY.
+   Implement a download flow: identify the source, present the
+   filename/source/destination to the user via confirm.request()
+   BEFORE downloading, perform the download only on confirmation,
+   verify the resulting file exists and is non-empty, and report the
+   result. This should live in actions/browser_control.py or a new
+   actions/download_manager.py — propose which fits better given the
+   existing code, and get my approval on the location before writing
+   files.
+4. Section 8 (File Operations) — natural-language multi-step planning:
+   implement the "put all my PDFs from Downloads into a folder called
+   College" pattern in actions/file_controller.py — inspect source
+   directory, identify matching files, create destination folder,
+   confirm the bulk move (reuse the same bulk-confirmation pattern from
+   item 1 above), execute, verify. Also add bulk rename/bulk modify
+   confirmation gates if those operations are exposed as tools.
+
+Report each item individually with diff + test results before
+proceeding to Phase 3.
+
+═══════════════════════════════════════════
+PHASE 3 — Net-new subsystems (architectural additions)
+═══════════════════════════════════════════
+These are bigger and should each get their own detailed sub-plan
+BEFORE implementation — do not write code for Phase 3 items until I've
+approved each one's design individually.
+
+1. Section 22 (Error Recovery): propose a closed-loop retry pattern
+   (click failed → re-screenshot → re-locate → retry once → report
+   failure with evidence) generalized across computer_control.py's
+   actions. Show me the design before implementing.
+2. Section 23 (Observability): propose a persistent logs/ directory
+   structure logging timestamp, user request, tool, action, permission
+   decision, result, error, and verification — with explicit
+   password/token/secret scrubbing before anything is written to disk.
+   Show me the design before implementing.
+3. Section 20 (Screen/Computer Context) — agent/context.py: propose a
+   lightweight state object tracking current active app, window,
+   working directory, and last action/result, populated from signals
+   already available (not new continuous screenshot polling). Show me
+   the design before implementing.
+4. Section 21 (Memory) — reconcile with the EXISTING
+   memory/memory_manager.py rather than creating a duplicate
+   agent/memory.py: propose extending the existing memory manager to
+   also track frequently used apps, preferred download directory, and
+   automation preferences, plus add secret-scrubbing on write (the
+   original audit found API keys/passwords could currently be written
+   to long_term.json in plain text — this needs fixing regardless).
+   Show me the design before implementing.
+5. Section 16 (Agent Orchestrator) — agent/orchestrator.py: this is the
+   largest, highest-risk item (multi-step planning, tool selection,
+   verification, recovery loop). Do NOT attempt this until Phases 1-2
+   and Phase 3 items 1-4 are complete and stable. When we reach this
+   point, propose a design and get explicit approval before any code —
+   this will need its own dedicated multi-session review given how
+   deep the Items 1-5 review process went for far smaller pieces.
+6. Section 17 (Tool Interface) — AgentTool base class: propose this
+   LAST, once all other work is done, since retrofitting a consistent
+   base class across every action module is a mechanical but
+   codebase-wide change best done once nothing else is actively
+   shifting underneath it.
+
+Do not start Phase 3 design proposals until Phase 1 and Phase 2 are
+both fully complete, tested, and confirmed by me.
+
+═══════════════════════════════════════════
+REPORTING
+═══════════════════════════════════════════
+After each individual item (not each phase), report: what was already
+present vs. newly built, the diff, the new POLICY_RULES entry if
+applicable, test results (new + full regression), and explicit
+confirmation that verify_permission_gates() still passes cleanly.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-25T10:54:27+05:30.
+
+The user's current state is as follows:
+Active Document: d:\Mark-LIV-main\primary\data\contacts.json (LANGUAGE_JSON)
+Cursor is on line: 1
+Other open documents:
+- d:\Mark-LIV-main\scratch\test_flag1_cases.py (LANGUAGE_PYTHON)
+- d:\Mark-LIV-main\scratch\test_flag1_verification.py (LANGUAGE_PYTHON)
+- d:\Mark-LIV-main\actions\computer_control.py (LANGUAGE_PYTHON)
+- d:\Mark-LIV-main\primary\config.py (LANGUAGE_PYTHON)
+- d:\Mark-LIV-main\config\voice_auth.json (LANGUAGE_JSON)
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Gemini 3.8 Flash (High). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

@@ -64,6 +64,20 @@ TEST_SUITES = [
     ("Section 17: YouTube Video Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_youtube_video_smoke.py"]),
     # Section 17: Web Search Smoke Suite
     ("Section 17: Web Search Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_web_search_smoke.py"]),
+    # Section 17: Flight Finder Smoke Suite
+    ("Section 17: Flight Finder Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_flight_finder_smoke.py"]),
+    # Section 17: Game Updater Smoke Suite
+    ("Section 17: Game Updater Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_game_updater_smoke.py"]),
+    # Section 17: Send Message Smoke Suite
+    ("Section 17: Send Message Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_send_message_smoke.py"]),
+    # Section 17: File Processor Smoke Suite
+    ("Section 17: File Processor Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_file_processor_smoke.py"]),
+    # Section 17: Computer Control Smoke Suite
+    ("Section 17: Computer Control Smoke Suite", [sys.executable, "-m", "pytest", "-v", "scratch/test_computer_control_smoke.py"]),
+    # Task 1: Phone Audio Output & Routing
+    ("Task 1: Phone Audio Output & Routing", [sys.executable, "-m", "unittest", "tests/test_phone_audio_output.py"]),
+    # Task 1: Mobile Audio Client JS & Playwright UI Tests
+    ("Task 1: Mobile Audio Client JS & UI", [sys.executable, "tests/verify_mobile_audio_ui.py"]),
 ]
 
 def main():

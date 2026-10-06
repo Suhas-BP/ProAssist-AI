@@ -11,6 +11,7 @@ Install deps:  pip install fastapi "uvicorn[standard]" cryptography
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -453,6 +454,15 @@ def _read(name: str) -> str:
     return (STATIC_DIR / name).read_text(encoding="utf-8")
 
 
+# ── WebSocket Close Codes (Task 1 Patch 4) ────────────────────────────────────
+WS_CLOSE_NORMAL: int = 1000
+WS_CLOSE_GOING_AWAY: int = 1001
+WS_CLOSE_DIFFERENT_DEVICE: int = 1008   # Another device is active / policy violation
+WS_CLOSE_REPLACED: int = 4000           # Stream takeover by another session
+WS_CLOSE_UNAUTHORIZED: int = 4001       # Missing or invalid authentication token
+WS_CLOSE_RATE_LIMITED: int = 4008       # Takeover rate limited (< 3s between takeovers)
+
+
 # ── DashboardServer ───────────────────────────────────────────────────────────
 
 class DashboardServer:
@@ -485,6 +495,26 @@ class DashboardServer:
         self._web_enroll_task             = None
         self._web_enroll_ws               = None
         self._live_audio_clients: set     = set()
+        self._live_audio_tokens: dict     = {}
+        self._desktop_muted_checker       = None
+        self._interrupt_callback          = None
+        self._phone_mic_disconnect_callback = None
+        self._phone_playback_disconnect_callback = None
+        self._phone_disconnect_callback   = None
+        self._status_checker              = None
+        self._audio_routing: str          = "phone"
+        self._pause_mic_on_reply: bool    = True
+        self._pause_mic_callback          = None
+        self._playback_clients: set       = set()
+        self._playback_queues: dict       = {}
+        self._playback_tokens: dict       = {}
+        self._last_playback_hb_time: dict = {}
+        self._last_playback_remaining_sec: dict = {}
+        self._playback_connect_time: dict = {}
+        self._replaced_websockets: set    = set()
+        self._live_audio_device_tokens: dict = {}
+        self._playback_device_tokens: dict = {}
+        self._last_takeover_time: dict    = {}
         self.app                          = self._build_app()
 
     # ── one-time key management ───────────────────────────────────────────
@@ -540,6 +570,194 @@ class DashboardServer:
 
     def set_conversation_active_checker(self, fn) -> None:
         self._conversation_active_checker = fn
+
+    def set_desktop_muted_checker(self, fn) -> None:
+        self._desktop_muted_checker = fn
+
+    def set_interrupt_callback(self, fn) -> None:
+        self._interrupt_callback = fn
+
+    def set_phone_mic_disconnect_callback(self, fn) -> None:
+        self._phone_mic_disconnect_callback = fn
+
+    def set_phone_playback_disconnect_callback(self, fn) -> None:
+        self._phone_playback_disconnect_callback = fn
+
+    def set_phone_disconnect_callback(self, fn) -> None:
+        # Sets both for backward compatibility
+        self._phone_mic_disconnect_callback = fn
+        self._phone_playback_disconnect_callback = fn
+        self._phone_disconnect_callback = fn
+
+    def set_status_checker(self, fn) -> None:
+        self._status_checker = fn
+
+    def get_current_status(self) -> str:
+        if self._status_checker:
+            try:
+                st = self._status_checker()
+                if st in ("active", "sleeping"):
+                    return st
+            except Exception:
+                pass
+        return "sleeping"
+
+    def is_playback_healthy(self, max_idle: float = 2.0) -> bool:
+        if not self._playback_clients:
+            return False
+        now = time.time()
+        for ws in list(self._playback_clients):
+            conn_t = self._playback_connect_time.get(ws, 0.0)
+            last_hb = self._last_playback_hb_time.get(ws, 0.0)
+            # Give 2.0s grace period from initial connection
+            if (now - conn_t < 2.0) or (now - last_hb <= max_idle):
+                return True
+        return False
+
+    def get_phone_playback_remaining_sec(self) -> float:
+        if not self._last_playback_remaining_sec:
+            return 0.0
+        return max(self._last_playback_remaining_sec.values(), default=0.0)
+
+    def _is_same_paired_device(self, tok1: str, dev_tok1: str, tok2: str, dev_tok2: str) -> bool:
+        """Check whether two connections belong to the same paired device/session (Item 2)."""
+        # 1. Exact bearer token match
+        if tok1 and tok2 and tok1 == tok2:
+            return True
+        # 2. Paired persistent device token match
+        if dev_tok1 and dev_tok2 and dev_tok1 == dev_tok2:
+            return True
+        # 3. Session key match (e.g. if device-login refreshed/rotated bearer token after reconnect)
+        key1 = self._token_keys.get(tok1) or (self._device_sessions.get(dev_tok1, {}).get("session_key"))
+        key2 = self._token_keys.get(tok2) or (self._device_sessions.get(dev_tok2, {}).get("session_key"))
+        if key1 and key2 and key1 == key2:
+            return True
+        return False
+
+    @staticmethod
+    def validate_audio_routing(routing_val, pause_mic_val) -> tuple[str | None, bool | None, str | None]:
+        clean_routing = None
+        clean_pause = None
+        if routing_val is not None:
+            if not isinstance(routing_val, str):
+                return None, None, "routing must be a string"
+            clean = routing_val.strip().lower()
+            if clean not in ("phone", "laptop", "both"):
+                return None, None, "Invalid routing option. Must be 'phone', 'laptop', or 'both'"
+            clean_routing = clean
+
+        if pause_mic_val is not None:
+            if not isinstance(pause_mic_val, bool):
+                return None, None, "pause_mic_on_reply must be a boolean"
+            clean_pause = pause_mic_val
+
+        return clean_routing, clean_pause, None
+
+    @staticmethod
+    async def _read_bounded_json(req: Request, max_bytes: int = 4096) -> tuple[dict | None, int]:
+        body = bytearray()
+        try:
+            async for chunk in req.stream():
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    return None, 413
+            if not body:
+                return {}, 200
+            data = json.loads(body.decode("utf-8"))
+            if not isinstance(data, dict):
+                return None, 400
+            return data, 200
+        except Exception:
+            return None, 400
+
+    def set_pause_mic_callback(self, fn) -> None:
+        self._pause_mic_callback = fn
+
+    def set_pause_mic_on_reply(self, enabled: bool) -> None:
+        self._pause_mic_on_reply = bool(enabled)
+        if self._pause_mic_callback:
+            try:
+                self._pause_mic_callback(self._pause_mic_on_reply)
+            except Exception:
+                pass
+
+    def get_pause_mic_on_reply(self) -> bool:
+        return self._pause_mic_on_reply
+
+    def set_audio_routing(self, routing: str) -> None:
+        r = str(routing or "").strip().lower()
+        if r in ("phone", "laptop", "both"):
+            self._audio_routing = r
+
+    def get_audio_routing(self) -> str:
+        return self._audio_routing
+
+    def is_phone_mic_active(self) -> bool:
+        if bool(self._live_audio_clients):
+            return True
+        if self._conversation_active_checker:
+            try:
+                return bool(self._conversation_active_checker())
+            except Exception:
+                pass
+        return False
+
+    def is_desktop_muted(self) -> bool:
+        if self._desktop_muted_checker:
+            try:
+                return bool(self._desktop_muted_checker())
+            except Exception:
+                pass
+        return False
+
+    async def broadcast_mic_state(self) -> None:
+        await self.broadcast({
+            "type": "mic_state",
+            "phone": self.is_phone_mic_active(),
+            "desktop_muted": self.is_desktop_muted(),
+        })
+
+    def broadcast_mic_state_sync(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast_mic_state())
+        except RuntimeError:
+            pass
+
+    def has_playback_clients(self) -> bool:
+        return bool(self._playback_clients)
+
+    def send_phone_playback(self, chunk: bytes) -> bool:
+        """Send PCM16 chunk to phone playback clients with bounded queue drop-oldest."""
+        if not self._playback_clients:
+            return False
+        dispatched = False
+        for ws, q in list(self._playback_queues.items()):
+            while q.full():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            try:
+                q.put_nowait(chunk)
+                dispatched = True
+            except asyncio.QueueFull:
+                pass
+        return dispatched
+
+    def flush_phone_playback(self) -> None:
+        """Clear queued phone playback audio and notify clients immediately."""
+        for q in list(self._playback_queues.values()):
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast({"type": "audio_flush"}))
+        except RuntimeError:
+            pass
 
     def _get_voice_auth(self):
         if self._voice_auth is not None:
@@ -815,40 +1033,150 @@ class DashboardServer:
                 self._wake_callback()
             return JSONResponse({"ok": True})
 
+        @app.post("/api/interrupt")
+        async def interrupt_ep(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            cl = req.headers.get("content-length")
+            if cl and int(cl) > 4096:
+                return JSONResponse({"error": "Payload too large"}, status_code=413)
+            self.flush_phone_playback()
+            if self._interrupt_callback:
+                try:
+                    self._interrupt_callback()
+                except Exception as e:
+                    print(f"[Dashboard] Interrupt error: {e}")
+            return JSONResponse({"ok": True})
+
+        @app.post("/api/audio-routing")
+        async def audio_routing_ep(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            # Enforce body size limit on bytes actually read (Item 6)
+            body, code = await self._read_bounded_json(req, max_bytes=4096)
+            if code == 413:
+                return JSONResponse({"error": "Payload too large"}, status_code=413)
+            if code != 200 or not isinstance(body, dict):
+                return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+            routing_val = body.get("routing")
+            pause_val = body.get("pause_mic_on_reply")
+            if routing_val is None:
+                return JSONResponse({"error": "Invalid routing option. Must be 'phone', 'laptop', or 'both'"}, status_code=400)
+
+            clean_r, clean_p, err = self.validate_audio_routing(routing_val, pause_val)
+            if err:
+                return JSONResponse({"error": err}, status_code=400)
+
+            if clean_r:
+                self.set_audio_routing(clean_r)
+            if clean_p is not None:
+                self.set_pause_mic_on_reply(clean_p)
+
+            await self.broadcast({
+                "type": "audio_routing",
+                "routing": self.get_audio_routing(),
+                "pause_mic_on_reply": self.get_pause_mic_on_reply()
+            })
+            return JSONResponse({
+                "ok": True,
+                "routing": self.get_audio_routing(),
+                "pause_mic_on_reply": self.get_pause_mic_on_reply()
+            })
+
+        @app.get("/api/audio-routing")
+        async def audio_routing_get_ep(req: Request):
+            if not _auth(req):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return JSONResponse({
+                "ok": True,
+                "routing": self.get_audio_routing(),
+                "pause_mic_on_reply": self.get_pause_mic_on_reply()
+            })
+
         # ── Phone mic real-time audio → Gemini Live ──────────────────────────
 
         @app.websocket("/ws/phone-audio")
-        async def phone_audio_ws(websocket: WebSocket, token: str = "", purpose: str = ""):
+        async def phone_audio_ws(websocket: WebSocket, token: str = "", purpose: str = "", device_token: str = ""):
             tok = token.strip()
+            dev_tok = device_token.strip()
             if not tok or tok not in self._tokens:
-                await websocket.close(code=4001, reason="Unauthorized")
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="Unauthorized")
                 return
 
             is_enroll = (purpose == "enrollment")
 
-            # Mutual exclusion check:
+            # Check enrollment purpose when live mic stream is already active (Item 2)
+            if is_enroll and len(self._live_audio_clients) > 0:
+                await websocket.accept()
+                await websocket.close(
+                    code=WS_CLOSE_DIFFERENT_DEVICE,
+                    reason="Cannot enroll voice while a phone microphone stream is active.",
+                )
+                asyncio.create_task(self.broadcast({
+                    "type": "sys",
+                    "text": "Enrollment rejected: phone microphone stream is currently live."
+                }))
+                return
+
+            # Mutual exclusion with active web enrollment:
             if self._web_enroll_active:
                 if not is_enroll:
                     await websocket.accept()
                     await websocket.close(
-                        code=1008,
+                        code=WS_CLOSE_DIFFERENT_DEVICE,
                         reason="Voice enrollment in progress. Live conversation unavailable.",
                     )
                     return
                 if self._web_enroll_ws is not None and self._web_enroll_ws is not websocket:
                     await websocket.accept()
                     await websocket.close(
-                        code=1008,
+                        code=WS_CLOSE_DIFFERENT_DEVICE,
                         reason="An enrollment audio stream is already active.",
                     )
                     return
-            else:
-                if is_enroll and self.is_phone_audio_in_use():
+
+            # Reconnect takeover logic keyed on paired device identity (Task 1 Final Patch Item 2):
+            if not is_enroll and len(self._live_audio_clients) > 0:
+                existing_ws = next(iter(self._live_audio_clients))
+                existing_tok = self._live_audio_tokens.get(existing_ws, "")
+                existing_dev = self._live_audio_device_tokens.get(existing_ws, "")
+                if self._is_same_paired_device(tok, dev_tok, existing_tok, existing_dev):
+                    dev_id = dev_tok or self._token_keys.get(tok) or tok
+                    now_ts = time.time()
+                    if ("audio", dev_id) in self._last_takeover_time and (now_ts - self._last_takeover_time[("audio", dev_id)] < 3.0):
+                        # Task 1 Patch 4: if same device replaced stream < 3s ago, reject with 4008 (rate limited)
+                        await websocket.accept()
+                        await websocket.close(
+                            code=WS_CLOSE_RATE_LIMITED,
+                            reason="rate limited",
+                        )
+                        return
+                    self._last_takeover_time[("audio", dev_id)] = now_ts
+                    # Same paired session/device reconnecting -> takeover
+                    self._replaced_websockets.add(existing_ws)
+                    try:
+                        await existing_ws.close(code=WS_CLOSE_REPLACED, reason="replaced")
+                    except Exception:
+                        pass
+                    self._live_audio_clients.discard(existing_ws)
+                    self._live_audio_tokens.pop(existing_ws, None)
+                    self._live_audio_device_tokens.pop(existing_ws, None)
+                    asyncio.create_task(self.broadcast({
+                        "type": "sys",
+                        "text": "Phone microphone reconnected (session takeover)."
+                    }))
+                else:
+                    # Genuinely different device -> reject with 1008
                     await websocket.accept()
                     await websocket.close(
-                        code=1008,
-                        reason="Live conversation in progress. Cannot start enrollment.",
+                        code=WS_CLOSE_DIFFERENT_DEVICE,
+                        reason="A phone microphone stream is already active from another device.",
                     )
+                    asyncio.create_task(self.broadcast({
+                        "type": "sys",
+                        "text": "Rejected incoming audio stream: a phone session is already streaming from another device."
+                    }))
                     return
 
             await websocket.accept()
@@ -856,34 +1184,195 @@ class DashboardServer:
                 self._web_enroll_ws = websocket
             else:
                 self._live_audio_clients.add(websocket)
+                self._live_audio_tokens[websocket] = tok
+                self._live_audio_device_tokens[websocket] = dev_tok
                 self._last_phone_audio_time = time.time()
+                await self.broadcast_mic_state()
+                # Agent state: orb / status pill shows active / listening
+                asyncio.create_task(self.broadcast({"type": "status", "state": "active"}))
 
             asyncio.create_task(self.broadcast(
                 {"type": "sys", "text": "Phone microphone live."}
             ))
+
             try:
                 while True:
-                    data = await websocket.receive_bytes()
-                    if is_enroll or self._web_enroll_active:
-                        with self._web_enroll_lock:
-                            self._web_enroll_buffer.extend(data)
-                    else:
-                        self._last_phone_audio_time = time.time()
+                    # Application-level liveness: 3s timeout with no heartbeat or audio (Item 1)
+                    try:
+                        msg = await asyncio.wait_for(websocket.receive(), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        asyncio.create_task(self.broadcast({
+                            "type": "sys",
+                            "text": "Phone microphone silent timeout (3s no audio/heartbeat)."
+                        }))
                         try:
-                            self._phone_audio_queue.put_nowait(
-                                {"data": data, "mime_type": "audio/pcm"}
-                            )
-                        except asyncio.QueueFull:
-                            pass  # drop frame rather than block
-            except WebSocketDisconnect:
+                            await websocket.close(code=WS_CLOSE_GOING_AWAY, reason="Heartbeat timeout")
+                        except Exception:
+                            pass
+                        break
+
+                    if msg["type"] == "websocket.disconnect":
+                        break
+
+                    self._last_phone_audio_time = time.time()
+
+                    if "bytes" in msg and msg["bytes"]:
+                        data = msg["bytes"]
+                        if is_enroll or self._web_enroll_active:
+                            with self._web_enroll_lock:
+                                self._web_enroll_buffer.extend(data)
+                        else:
+                            try:
+                                self._phone_audio_queue.put_nowait(
+                                    {"data": data, "mime_type": "audio/pcm"}
+                                )
+                            except asyncio.QueueFull:
+                                pass  # drop frame rather than block
+                    elif "text" in msg and msg["text"]:
+                        # Heartbeat {"type": "hb"}
+                        pass
+            except (WebSocketDisconnect, asyncio.CancelledError):
                 pass
             finally:
+                was_replaced = websocket in self._replaced_websockets
+                self._replaced_websockets.discard(websocket)
                 if is_enroll and self._web_enroll_ws is websocket:
                     self._web_enroll_ws = None
                 self._live_audio_clients.discard(websocket)
-                asyncio.create_task(self.broadcast(
-                    {"type": "sys", "text": "Phone microphone stopped."}
-                ))
+                self._live_audio_tokens.pop(websocket, None)
+                self._live_audio_device_tokens.pop(websocket, None)
+                if not was_replaced:
+                    if self._phone_mic_disconnect_callback:
+                        try:
+                            self._phone_mic_disconnect_callback()
+                        except Exception:
+                            pass
+                    asyncio.create_task(self.broadcast(
+                        {"type": "sys", "text": "Phone microphone stopped."}
+                    ))
+                    # Status accuracy: broadcast real restored state from AgentLive (Item 5)
+                    restored_state = self.get_current_status()
+                    asyncio.create_task(self.broadcast({"type": "status", "state": restored_state}))
+                    await self.broadcast_mic_state()
+
+        # ── Phone downstream audio playback ──────────────────────────────────
+        # Behavior for multiple playback clients:
+        # Deterministic broadcast fan-out. All connected playback clients receive the
+        # audio chunks simultaneously. Each client maintains an independent bounded
+        # queue (maxsize=100 chunks ≈ 5s). On overflow, oldest chunks are dropped for
+        # that client independently without impacting other connected clients.
+
+        @app.websocket("/ws/phone-playback")
+        async def phone_playback_ws(websocket: WebSocket, token: str = "", device_token: str = ""):
+            tok = token.strip()
+            dev_tok = device_token.strip()
+            if not tok or tok not in self._tokens:
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="Unauthorized")
+                return
+
+            # Reconnect takeover for playback keyed on paired device identity (Item 2):
+            existing_for_dev = [
+                ws for ws in list(self._playback_clients)
+                if self._is_same_paired_device(
+                    tok, dev_tok,
+                    self._playback_tokens.get(ws, ""),
+                    self._playback_device_tokens.get(ws, "")
+                )
+            ]
+            if existing_for_dev:
+                dev_id = dev_tok or self._token_keys.get(tok) or tok
+                now_ts = time.time()
+                if ("playback", dev_id) in self._last_takeover_time and (now_ts - self._last_takeover_time[("playback", dev_id)] < 3.0):
+                    # Task 1 Patch 4: if same device replaced playback stream < 3s ago, reject with 4008 (rate limited)
+                    await websocket.accept()
+                    await websocket.close(
+                        code=WS_CLOSE_RATE_LIMITED,
+                        reason="rate limited",
+                    )
+                    return
+                self._last_takeover_time[("playback", dev_id)] = now_ts
+
+            for old_ws in existing_for_dev:
+                self._replaced_websockets.add(old_ws)
+                try:
+                    await old_ws.close(code=WS_CLOSE_REPLACED, reason="replaced")
+                except Exception:
+                    pass
+                self._playback_clients.discard(old_ws)
+                self._playback_queues.pop(old_ws, None)
+                self._playback_tokens.pop(old_ws, None)
+                self._playback_device_tokens.pop(old_ws, None)
+                self._last_playback_hb_time.pop(old_ws, None)
+                self._last_playback_remaining_sec.pop(old_ws, None)
+                self._playback_connect_time.pop(old_ws, None)
+
+            await websocket.accept()
+            q: asyncio.Queue = asyncio.Queue(maxsize=100)
+            now = time.time()
+            self._playback_clients.add(websocket)
+            self._playback_queues[websocket] = q
+            self._playback_tokens[websocket] = tok
+            self._playback_device_tokens[websocket] = dev_tok
+            self._last_playback_hb_time[websocket] = now
+            self._last_playback_remaining_sec[websocket] = 0.0
+            self._playback_connect_time[websocket] = now
+
+            async def _send_loop():
+                while True:
+                    chunk = await q.get()
+                    if chunk is None:
+                        break
+                    await websocket.send_bytes(chunk)
+
+            async def _recv_loop():
+                while True:
+                    try:
+                        # 3s timeout for heartbeats from playback client (Item 1)
+                        msg = await asyncio.wait_for(websocket.receive(), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        break
+                    if msg["type"] == "websocket.disconnect":
+                        break
+                    if "text" in msg and msg["text"]:
+                        try:
+                            payload = json.loads(msg["text"])
+                            if payload.get("type") == "hb":
+                                self._last_playback_hb_time[websocket] = time.time()
+                                self._last_playback_remaining_sec[websocket] = float(payload.get("remaining_sec", 0.0))
+                        except Exception:
+                            pass
+
+            send_task = asyncio.create_task(_send_loop())
+            recv_task = asyncio.create_task(_recv_loop())
+
+            try:
+                done, pending = await asyncio.wait(
+                    [send_task, recv_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                for t in pending:
+                    t.cancel()
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+            finally:
+                send_task.cancel()
+                recv_task.cancel()
+                was_replaced = websocket in self._replaced_websockets
+                self._replaced_websockets.discard(websocket)
+                self._playback_clients.discard(websocket)
+                self._playback_queues.pop(websocket, None)
+                self._playback_tokens.pop(websocket, None)
+                self._playback_device_tokens.pop(websocket, None)
+                self._last_playback_hb_time.pop(websocket, None)
+                self._last_playback_remaining_sec.pop(websocket, None)
+                self._playback_connect_time.pop(websocket, None)
+                if not was_replaced:
+                    # Playback disconnect callback (Item 6: only changes routing, does NOT reset mic)
+                    if self._phone_playback_disconnect_callback:
+                        try:
+                            self._phone_playback_disconnect_callback()
+                        except Exception:
+                            pass
 
         # ── File sharing ──────────────────────────────────────────────────────
 
@@ -1131,11 +1620,20 @@ class DashboardServer:
         async def ws_ep(websocket: WebSocket, token: str = ""):
             tok = token.strip()
             if not tok or tok not in self._tokens:
-                await websocket.close(code=4001)
+                await websocket.close(code=WS_CLOSE_UNAUTHORIZED)
                 return
             await websocket.accept()
             websocket._send_lock = asyncio.Lock()
             self._clients.add(websocket)
+            await self._safe_send_json(websocket, {
+                "type": "mic_state",
+                "phone": self.is_phone_mic_active(),
+                "desktop_muted": self.is_desktop_muted(),
+            })
+            await self._safe_send_json(websocket, {
+                "type": "audio_routing",
+                "routing": self.get_audio_routing(),
+            })
             for entry in self._history[-50:]:
                 try:
                     await self._safe_send_json(websocket, entry)
@@ -1167,14 +1665,49 @@ class DashboardServer:
             metrics_task = asyncio.create_task(_send_metrics())
             try:
                 while True:
-                    data = await websocket.receive_json()
-                    if data.get("type") == "command":
+                    try:
+                        raw_msg = await websocket.receive_text()
+                    except (WebSocketDisconnect, RuntimeError):
+                        break
+                    if len(raw_msg) > 65536:
+                        continue
+                    try:
+                        data = json.loads(raw_msg)
+                    except Exception:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+
+                    mtype = data.get("type")
+                    if mtype == "command":
                         enc = data.get("enc", "")
                         t   = self._decrypt(tok, enc) if enc else (data.get("text") or "").strip()
                         if t:
                             await self._command_queue.put(t)
                             if self._wake_callback:
                                 self._wake_callback()
+                    elif mtype == "interrupt":
+                        self.flush_phone_playback()
+                        if self._interrupt_callback:
+                            try:
+                                self._interrupt_callback()
+                            except Exception:
+                                pass
+                    elif mtype == "audio_routing":
+                        r, pause_mic, err = self.validate_audio_routing(
+                            data.get("routing"), data.get("pause_mic_on_reply")
+                        )
+                        if err:
+                            continue  # Discard invalid parameters without closing connection
+                        if r is not None:
+                            self.set_audio_routing(r)
+                        if pause_mic is not None:
+                            self.set_pause_mic_on_reply(pause_mic)
+                        await self.broadcast({
+                            "type": "audio_routing",
+                            "routing": self.get_audio_routing(),
+                            "pause_mic_on_reply": self.get_pause_mic_on_reply(),
+                        })
             except WebSocketDisconnect:
                 pass
             finally:
@@ -1194,6 +1727,7 @@ class DashboardServer:
         asyncio.get_event_loop().run_in_executor(None, _ensure_network_access, PORT + 1)
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0", port=PORT + 1, log_level="warning",
+            ws_ping_interval=10.0, ws_ping_timeout=10.0,
             ssl_keyfile=str(ssl_key), ssl_certfile=str(ssl_cert),
         )
         print(f"[Dashboard] Manual entry:  {self._ip}:{PORT + 1}  (type in browser, accept cert once)")
@@ -1221,6 +1755,7 @@ class DashboardServer:
 
         cfg = uvicorn.Config(
             self.app, host="0.0.0.0", port=PORT, log_level="warning",
+            ws_ping_interval=10.0, ws_ping_timeout=10.0,
             **({"ssl_keyfile": str(ssl_key), "ssl_certfile": str(ssl_cert)} if use_ssl else {}),
         )
 

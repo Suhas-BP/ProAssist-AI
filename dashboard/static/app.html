@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>AGENT Dashboard</title>
   <link rel="stylesheet" href="/static/tabler-icons.min.css">
   <script src="/static/crypto.js"></script>
@@ -47,9 +47,37 @@
       flex-direction: column;
       gap: 12px;
       height: 100vh;
+      height: 100dvh;
       max-width: 1400px;
       margin: 0 auto;
       width: 100%;
+    }
+
+    /* Minimal wrappers helper styles for desktop */
+    .sys-bars-grid {
+      display: block;
+    }
+    .card-activity-log {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    .btn-interrupt-text {
+      display: inline;
+    }
+    .core-info {
+      display: contents;
+    }
+    .btn-mobile-menu {
+      display: none !important;
+    }
+    .btn-attach {
+      display: none;
+    }
+    .btn-jump-latest {
+      display: none;
     }
 
     /* ── TOP BAR ── */
@@ -612,26 +640,162 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      background: var(--green-dim);
-      border: 0.5px solid var(--green-border);
-      color: var(--green-accent);
+      background: var(--btn-bg);
+      border: 1px solid var(--btn-border);
+      color: var(--text-gray);
       padding: 8px 14px;
       border-radius: 9px;
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
-      transition: opacity 0.15s, background 0.2s, border-color 0.2s;
+      transition: opacity 0.15s, background 0.2s, border-color 0.2s, color 0.2s;
     }
     #mic-btn:hover { opacity: 0.88; }
-    #mic-btn.recording {
-      background: var(--red-bg);
-      border-color: var(--red-border);
-      color: var(--red-text);
-      animation: pulse-mic 1.2s infinite ease-in-out;
+    #mic-btn.state-idle {
+      background: var(--btn-bg);
+      border: 1px solid var(--btn-border);
+      color: var(--text-gray);
     }
-    @keyframes pulse-mic {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(0.97); opacity: 0.8; }
+    #mic-btn.state-streaming, #mic-btn.recording {
+      background: var(--green-dim);
+      border: 1px solid var(--green-accent);
+      color: var(--green-bright);
+      animation: pulse-mic-live 1.3s infinite ease-in-out;
+    }
+    @keyframes pulse-mic-live {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(46, 230, 114, 0.4);
+      }
+      50% {
+        transform: scale(1.03);
+        box-shadow: 0 0 8px 2px rgba(46, 230, 114, 0.35);
+      }
+    }
+    #mic-btn.state-muted {
+      background: rgba(232, 163, 61, 0.12);
+      border: 1px solid var(--amber);
+      color: var(--amber);
+    }
+    #mic-btn.state-error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #f87171;
+    }
+    #mic-btn.state-reconnecting {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid #3b82f6;
+      color: #60a5fa;
+      animation: pulse-mic-reconnecting 1.2s infinite ease-in-out;
+    }
+    @keyframes pulse-mic-reconnecting {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+      }
+      50% {
+        transform: scale(1.02);
+        box-shadow: 0 0 8px 2px rgba(59, 130, 246, 0.35);
+      }
+    }
+    .laptop-mic-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 500;
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 10px;
+      padding: 3px 8px;
+      margin-top: 6px;
+      transition: opacity 0.2s;
+    }
+    .laptop-mic-badge i { font-size: 12px; }
+    /* Audio routing segmented control */
+    .routing-section {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .routing-btn-group {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .routing-opt-btn {
+      flex: 1;
+      min-height: 44px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      color: #8b9bb4;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      font-family: inherit;
+    }
+    .routing-opt-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #dde3ed;
+    }
+    .routing-opt-btn.active {
+      background: var(--green-dim);
+      border-color: var(--green-accent);
+      color: var(--green-bright);
+      font-weight: 600;
+    }
+    .pause-mic-section {
+      padding: 12px 16px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .switch-toggle {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .switch-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .switch-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #1a2234;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      transition: 0.22s;
+    }
+    .switch-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 2px;
+      bottom: 2px;
+      background-color: #7e8b9b;
+      border-radius: 50%;
+      transition: 0.22s;
+    }
+    .switch-toggle input:checked + .switch-slider {
+      background-color: var(--green-dim);
+      border-color: var(--green-border);
+    }
+    .switch-toggle input:checked + .switch-slider:before {
+      transform: translateX(20px);
+      background-color: var(--green-accent);
     }
     #mic-btn i { font-size: 14px; }
 
@@ -662,17 +826,6 @@
     #toast.show {
       opacity: 1;
       transform: translateX(-50%) translateY(0);
-    }
-
-    /* Responsive adjustments */
-    @media (max-width: 880px) {
-      .dashboard-grid {
-        grid-template-columns: 1fr;
-        overflow-y: auto;
-      }
-      .col-right {
-        min-height: 320px;
-      }
     }
 
     /* ── MEMORY MODAL COMPONENT ── */
@@ -1088,10 +1241,713 @@
       transition: width 0.06s ease-out;
       border-radius: 2px;
     }
+
+    .modal-action-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      min-height: 48px;
+      padding: 12px 14px;
+      background: var(--btn-bg);
+      border: 1px solid var(--btn-border);
+      border-radius: 10px;
+      color: var(--text-white);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .modal-action-row:active {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .modal-action-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .modal-action-left i {
+      font-size: 18px;
+      color: var(--green-accent);
+    }
+
+    /* ==========================================================================
+       RESPONSIVE DESIGN SYSTEM
+       - Desktop (>= 1024px): Pixel-identical 3-column layout.
+       - Tablet (769px - 1023px): 2-column layout.
+       - Mobile (<= 768px): Single-column, touch-optimized, full-scroll, bottom command bar.
+       - Small Phone (<= 400px): Compact spacing, icon-only mic & interrupt, touch-safe.
+       - Landscape Phone ((orientation: landscape) and (max-height: 500px)): Compact scaling.
+       ========================================================================== */
+
+    /* ── TABLET BREAKPOINT (769px - 1023px): 2 Columns ── */
+    @media (min-width: 769px) and (max-width: 1023px) {
+      html, body {
+        height: auto;
+        min-height: 100dvh;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .dashboard-container {
+        height: auto;
+        min-height: 100dvh;
+        padding: 12px 12px calc(80px + env(safe-area-inset-bottom, 0px));
+        gap: 12px;
+      }
+      .dashboard-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .col-left {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 0;
+      }
+      .col-center {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        min-height: 0;
+      }
+      .col-right {
+        grid-column: 1 / -1;
+        min-height: 280px;
+        display: flex;
+        flex-direction: column;
+      }
+      footer.bottom-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 999;
+        border-radius: 14px 14px 0 0;
+        padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.65);
+      }
+      #inp {
+        font-size: 16px;
+      }
+    }
+
+    /* ── MOBILE BREAKPOINT (<= 768px): Touch & Refined Mobile Layout ── */
+    @media (max-width: 768px) {
+      html, body {
+        height: 100%;
+        height: 100dvh;
+        overflow: hidden;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .dashboard-container {
+        height: 100%;
+        height: 100dvh;
+        max-height: 100dvh;
+        padding: calc(8px + env(safe-area-inset-top, 0px)) 12px calc(68px + env(safe-area-inset-bottom, 0px));
+        gap: 8px;
+        overflow: hidden;
+        max-width: 100%;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Single column vertical flow */
+      .dashboard-grid {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      /* Flatten column containers so children reorder flexibly */
+      .col-left, .col-center, .col-right {
+        display: contents;
+      }
+
+      /* A. Mobile only: hide Controls panel, System monitor, Drop zone, Status chips */
+      .card-controls,
+      .card-sys,
+      .card-drop,
+      .act-foot-badges {
+        display: none !important;
+      }
+
+      /* 1. Header (Compact, 2 rows + Menu button) */
+      header.top-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 14px;
+        width: 100%;
+        box-sizing: border-box;
+        flex-shrink: 0;
+      }
+      .top-left {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        width: 100%;
+        min-width: 0;
+      }
+      .top-right {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        padding-top: 6px;
+        border-top: 0.5px solid var(--border);
+      }
+      .enc-badge {
+        margin-left: auto;
+      }
+      .url {
+        font-size: 10px;
+        max-width: 130px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: inline-block;
+      }
+      .top-date {
+        font-size: 12px;
+      }
+      .top-time {
+        font-size: 14px;
+      }
+      .btn-circle {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+      }
+      /* B. Header Menu Button */
+      .btn-mobile-menu {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        background: var(--btn-bg);
+        border: 1px solid var(--btn-border);
+        border-radius: 50%;
+        color: var(--text-white);
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      /* C. Compact Orb Row (~72px orb + Title + Status pill side by side) */
+      .card-core {
+        order: 2;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        padding: 8px 12px !important;
+        gap: 12px !important;
+        border-radius: 14px;
+        width: 100%;
+        box-sizing: border-box;
+        min-width: 0;
+        flex: 0 0 auto !important;
+        flex-shrink: 0 !important;
+      }
+      .card-core svg {
+        width: 72px !important;
+        height: 72px !important;
+        min-width: 72px !important;
+        min-height: 72px !important;
+        flex-shrink: 0 !important;
+      }
+      .core-info {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        gap: 4px !important;
+        min-width: 0 !important;
+        flex: 1 !important;
+      }
+      .core-title {
+        font-size: 15px !important;
+        font-weight: 600;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        text-align: left !important;
+      }
+      .core-sub {
+        display: none !important;
+      }
+      .pill {
+        min-height: 32px !important;
+        padding: 4px 10px !important;
+        font-size: 11.5px !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        white-space: nowrap !important;
+      }
+      .pill span {
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+
+      /* C. Activity Log Main Content (flex: 1, fills viewport, internal scroll) */
+      .card-activity-log {
+        order: 3;
+        background: var(--card-bg);
+        border: 0.5px solid var(--border);
+        border-radius: 14px;
+        padding: 12px;
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 !important;
+        min-height: 50dvh !important;
+        max-height: none !important;
+        width: 100%;
+        box-sizing: border-box;
+        min-width: 0;
+        position: relative !important;
+        overflow: hidden !important;
+      }
+      .act-header {
+        margin-bottom: 8px;
+        flex-shrink: 0;
+      }
+      #feed {
+        flex: 1 !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+        padding-right: 4px;
+        min-width: 0;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .msg {
+        font-size: 15px !important;
+        line-height: 1.5 !important;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .msg-sys {
+        font-size: 13.5px !important;
+        color: var(--text-gray);
+        padding: 2px 0;
+      }
+      .sys-badge {
+        color: var(--blue-sys);
+        font-weight: 700;
+        font-size: 11.5px;
+        background: rgba(91, 157, 255, 0.12);
+        border: 1px solid rgba(91, 157, 255, 0.25);
+        border-radius: 4px;
+        padding: 1px 5px;
+        margin-right: 6px;
+        display: inline-block;
+      }
+      .msg-j {
+        padding: 10px 14px !important;
+        font-size: 15px !important;
+        border-radius: 12px !important;
+        border-bottom-left-radius: 3px !important;
+        max-width: 90% !important;
+      }
+      .msg-j .lbl {
+        color: var(--green-accent);
+        font-weight: 600;
+        font-size: 12px;
+        margin-bottom: 2px;
+      }
+      .msg-u {
+        padding: 10px 14px !important;
+        font-size: 15px !important;
+        border-radius: 12px !important;
+        border-bottom-right-radius: 3px !important;
+        max-width: 90% !important;
+      }
+      .msg-u .lbl {
+        color: var(--text-muted);
+        font-weight: 600;
+        font-size: 12px;
+        margin-bottom: 2px;
+        text-align: right;
+      }
+      .msg-file {
+        max-width: 90% !important;
+        font-size: 14px !important;
+      }
+
+      /* C. Jump to Latest Button */
+      .btn-jump-latest {
+        display: none;
+        position: absolute;
+        bottom: 12px;
+        right: 12px;
+        background: rgba(20, 21, 22, 0.92);
+        border: 1px solid var(--green-border);
+        color: var(--green-accent);
+        border-radius: 20px;
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: 500;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+        cursor: pointer;
+        z-index: 20;
+        align-items: center;
+        gap: 6px;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        transition: opacity 0.2s, transform 0.2s;
+      }
+      .btn-jump-latest.visible {
+        display: flex !important;
+      }
+      .btn-jump-latest:hover, .btn-jump-latest:active {
+        background: var(--green-dim);
+        border-color: var(--green-accent);
+      }
+
+      /* D & E. Bottom Command Bar */
+      footer.bottom-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 999;
+        background: rgba(20, 21, 22, 0.95);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 0.5px solid var(--border);
+        border-bottom: none;
+        border-radius: 16px 16px 0 0;
+        margin: 0;
+        padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+        box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+      .btn-attach {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        background: var(--btn-bg);
+        border: 1px solid var(--btn-border);
+        color: var(--text-gray);
+        cursor: pointer;
+        flex-shrink: 0;
+        font-size: 16px;
+      }
+      .btn-attach:active {
+        transform: scale(0.96);
+        background: rgba(255, 255, 255, 0.08);
+      }
+      #inp {
+        flex: 1;
+        min-width: 0;
+        height: 44px;
+        min-height: 44px;
+        font-size: 16px; /* iOS zoom prevention */
+        background: var(--btn-bg);
+        border: 0.5px solid var(--btn-border);
+        border-radius: 10px;
+        padding: 0 12px;
+        color: var(--text-white);
+        box-sizing: border-box;
+      }
+      .audio-bars {
+        display: none !important;
+      }
+      .btn-send {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        justify-content: center;
+        flex-shrink: 0;
+        border-radius: 10px;
+      }
+      .btn-interrupt {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        justify-content: center;
+        flex-shrink: 0;
+        border-radius: 10px;
+      }
+      .btn-interrupt-text {
+        display: none; /* Collapse to icon-only */
+      }
+      #mic-btn {
+        min-height: 44px;
+        min-width: 44px;
+        height: 44px;
+        padding: 0 10px;
+        justify-content: center;
+        flex-shrink: 0;
+        border-radius: 10px;
+        white-space: nowrap;
+      }
+      #mic-btn span {
+        font-size: 12px;
+      }
+
+      /* 8. Modals as Full-Width Bottom Sheets */
+      .modal-backdrop {
+        padding: 0;
+        align-items: flex-end; /* Bottom sheet */
+        z-index: 10000;
+      }
+      .modal-panel {
+        width: 100%;
+        max-width: 100% !important;
+        max-height: 90dvh;
+        border-radius: 18px 18px 0 0;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.85);
+        animation: sheet-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes sheet-enter {
+        from { transform: translateY(100%); }
+        to   { transform: translateY(0); }
+      }
+      .modal-header {
+        padding: 14px 16px 8px;
+      }
+      .modal-subtitle {
+        padding: 0 16px 12px;
+      }
+      .modal-body {
+        padding: 12px 16px;
+        max-height: calc(90dvh - 130px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .modal-footer {
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+      }
+      .modal-close-btn {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+      }
+      .modal-btn {
+        min-height: 44px;
+        padding: 10px 16px;
+        font-size: 13px;
+      }
+      .modal-input {
+        min-height: 44px;
+        font-size: 16px; /* iOS zoom prevention */
+      }
+      .audio-device-item {
+        min-height: 48px;
+        padding: 10px 12px;
+      }
+
+      #toast {
+        top: calc(12px + env(safe-area-inset-top, 0px));
+        max-width: 90vw;
+      }
+    }
+
+    /* ── SMALL PHONE TWEAK (<= 400px) ── */
+    @media (max-width: 400px) {
+      header.top-bar {
+        padding: 8px 10px;
+        gap: 6px;
+      }
+      .brand-title {
+        font-size: 14px;
+      }
+      .badge-ver {
+        font-size: 10px;
+        padding: 2px 6px;
+      }
+      .top-date {
+        font-size: 11px;
+      }
+      .top-time {
+        font-size: 13px;
+      }
+      .card-core {
+        flex: 0 0 auto !important;
+        padding: 6px 10px !important;
+        gap: 10px !important;
+      }
+      .card-core svg {
+        width: 64px !important;
+        height: 64px !important;
+        min-width: 64px !important;
+        min-height: 64px !important;
+      }
+      .pill {
+        font-size: 11px !important;
+        padding: 3px 8px !important;
+      }
+      #mic-btn span {
+        display: none; /* Collapse mic button to icon only on <= 400px */
+      }
+      #mic-btn {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+      }
+      footer.bottom-bar {
+        padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+        gap: 4px;
+      }
+      .btn-attach, .btn-send, .btn-interrupt, #mic-btn {
+        min-width: 44px;
+        width: 44px;
+        min-height: 44px;
+        height: 44px;
+      }
+    }
+
+    /* ── LANDSCAPE PHONE TWEAK ((orientation: landscape) and (max-height: 500px)) ── */
+    @media (orientation: landscape) and (max-height: 500px) {
+      .dashboard-container {
+        padding: 6px 10px calc(58px + env(safe-area-inset-bottom, 0px));
+        gap: 6px;
+      }
+      .card-core {
+        padding: 4px 8px !important;
+        gap: 8px !important;
+      }
+      .card-core svg {
+        width: 50px !important;
+        height: 50px !important;
+        min-width: 50px !important;
+        min-height: 50px !important;
+      }
+      .card-activity-log {
+        min-height: 0 !important;
+        flex: 1 !important;
+      }
+      footer.bottom-bar {
+        padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+      }
+      .modal-panel {
+        max-height: 95dvh;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="toast"></div>
+
+  <!-- ── MOBILE CONTROLS MENU BOTTOM SHEET ── -->
+  <div id="mobile-menu-modal" class="modal-backdrop" onclick="if(event.target===this) closeMobileMenu()">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="mobile-menu-title" style="max-width:440px;">
+      <div class="modal-header">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <i class="ti ti-adjustments-horizontal" style="font-size:18px;color:var(--green-accent)" aria-hidden="true"></i>
+          <h3 id="mobile-menu-title" style="font-size:15px;font-weight:600;color:#f2f2f2;margin:0;">Controls</h3>
+        </div>
+        <button class="modal-close-btn" onclick="closeMobileMenu()" aria-label="Close menu">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <p class="modal-subtitle">Assistant controls and hardware preferences.</p>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;padding:8px 16px 20px;">
+        <button class="modal-action-row" onclick="closeMobileMenu(); toggleRemote();">
+          <div class="modal-action-left">
+            <i class="ti ti-broadcast" aria-hidden="true"></i>
+            <span>Remote control</span>
+          </div>
+          <span class="ctrl-badge active" id="m-rc-status">Active</span>
+        </button>
+        <button class="modal-action-row" onclick="closeMobileMenu(); doWake();">
+          <div class="modal-action-left">
+            <i class="ti ti-microphone" aria-hidden="true"></i>
+            <span>Wake word</span>
+          </div>
+          <span class="ctrl-badge" id="m-wake-status">On</span>
+        </button>
+        <button class="modal-action-row" onclick="closeMobileMenu(); openVoiceAuthModal();">
+          <div class="modal-action-left">
+            <i class="ti ti-fingerprint" aria-hidden="true"></i>
+            <span>Voice auth</span>
+          </div>
+          <span class="ctrl-badge" id="m-va-status">Off</span>
+        </button>
+        <button class="modal-action-row" onclick="closeMobileMenu(); openAudioModal();">
+          <div class="modal-action-left">
+            <i class="ti ti-headphones" aria-hidden="true"></i>
+            <span>Audio devices</span>
+          </div>
+          <span class="ctrl-badge" id="m-audio-status">Default</span>
+        </button>
+        <div class="modal-action-row" style="cursor:default;">
+          <div class="modal-action-left">
+            <i class="ti ti-device-laptop" aria-hidden="true"></i>
+            <span>Laptop microphone</span>
+          </div>
+          <span class="ctrl-badge active" id="m-laptop-mic-status">Active</span>
+        </div>
+        <button class="modal-action-row" onclick="closeMobileMenu(); openMemoryModal();">
+          <div class="modal-action-left">
+            <i class="ti ti-brain" aria-hidden="true"></i>
+            <span>Memory</span>
+          </div>
+          <i class="ti ti-chevron-right" style="color:var(--text-muted);font-size:14px;" aria-hidden="true"></i>
+        </button>
+        <div class="routing-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:13px;font-weight:500;color:#dde3ed;">Replies on</span>
+            <span id="routing-current-label" style="font-size:12px;color:var(--text-muted);text-transform:capitalize;">Phone</span>
+          </div>
+          <div class="routing-btn-group">
+            <button type="button" class="routing-opt-btn active" id="route-btn-phone" onclick="setAudioRouting('phone')">Phone</button>
+            <button type="button" class="routing-opt-btn" id="route-btn-laptop" onclick="setAudioRouting('laptop')">Laptop</button>
+            <button type="button" class="routing-opt-btn" id="route-btn-both" onclick="setAudioRouting('both')">Both</button>
+          </div>
+        </div>
+        <div class="pause-mic-section">
+          <div style="display:flex;flex-direction:column;gap:2px;">
+            <span style="font-size:13px;color:#dde3ed;">Pause mic while replying</span>
+            <span style="font-size:11px;color:var(--text-muted);">Prevents speaker feedback</span>
+          </div>
+          <label class="switch-toggle" title="Pause phone microphone while assistant speaks">
+            <input type="checkbox" id="pause-mic-toggle" onchange="togglePauseMicOnReply(this.checked)" checked>
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn" onclick="closeMobileMenu()" style="width:100%;">Done</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── MEMORY MODAL ── -->
   <div id="memory-modal" class="modal-backdrop" onclick="if(event.target===this) closeMemoryModal()">
@@ -1299,6 +2155,9 @@
         <button class="btn-circle" aria-label="Settings" onclick="toast('Settings drawer available in AGENT desktop HUD')">
           <i class="ti ti-settings" style="font-size:15px;color:var(--text-gray)" aria-hidden="true"></i>
         </button>
+        <button class="btn-circle btn-mobile-menu" id="btn-mobile-menu" aria-label="Controls Menu" onclick="openMobileMenu()">
+          <i class="ti ti-menu-2" style="font-size:17px;color:var(--text-white)" aria-hidden="true"></i>
+        </button>
       </div>
     </header>
 
@@ -1310,22 +2169,24 @@
         <!-- System Monitor -->
         <div class="card-sys">
           <p class="sec-label">System monitor</p>
-          <div class="metric-row">
-            <div class="metric-label-val">
-              <span class="metric-label">CPU</span>
-              <span class="metric-val" id="cpu-val">22%</span>
+          <div class="sys-bars-grid">
+            <div class="metric-row">
+              <div class="metric-label-val">
+                <span class="metric-label">CPU</span>
+                <span class="metric-val" id="cpu-val">22%</span>
+              </div>
+              <div class="metric-track">
+                <div class="metric-fill-cpu" id="cpu-bar"></div>
+              </div>
             </div>
-            <div class="metric-track">
-              <div class="metric-fill-cpu" id="cpu-bar"></div>
-            </div>
-          </div>
-          <div class="metric-row" style="margin-bottom:10px">
-            <div class="metric-label-val">
-              <span class="metric-label">Memory</span>
-              <span class="metric-val" id="mem-val">68%</span>
-            </div>
-            <div class="metric-track">
-              <div class="metric-fill-mem" id="mem-bar"></div>
+            <div class="metric-row" style="margin-bottom:10px">
+              <div class="metric-label-val">
+                <span class="metric-label">Memory</span>
+                <span class="metric-val" id="mem-val">68%</span>
+              </div>
+              <div class="metric-track">
+                <div class="metric-fill-mem" id="mem-bar"></div>
+              </div>
             </div>
           </div>
           <div class="grid-stats">
@@ -1404,11 +2265,17 @@
             <circle cx="86" cy="98" r="2.5" fill="#4fe28c"/>
             <circle cx="114" cy="98" r="2.5" fill="#4fe28c"/>
           </svg>
-          <p class="core-title">Agent</p>
-          <p class="core-sub">A friendly assistant</p>
-          <div class="pill" id="pill" onclick="doWake()">
-            <div class="dot"></div>
-            <span id="st">Sleeping — say "Agent" to wake</span>
+          <div class="core-info">
+            <p class="core-title">Agent</p>
+            <p class="core-sub">A friendly assistant</p>
+            <div class="pill" id="pill" onclick="doWake()">
+              <div class="dot"></div>
+              <span id="st">Sleeping — say "Agent" to wake</span>
+            </div>
+            <div id="laptop-mic-badge" class="laptop-mic-badge" style="display:none;" title="Laptop microphone is muted">
+              <i class="ti ti-microphone-off" aria-hidden="true"></i>
+              <span>Laptop mic: muted</span>
+            </div>
           </div>
         </div>
 
@@ -1423,17 +2290,15 @@
 
       <!-- ── RIGHT COLUMN: Activity Log (Full Height) ── -->
       <div class="col-right">
-        <div class="act-header">
-          <p class="act-title">Activity log</p>
-          <span class="act-badge">live</span>
-        </div>
-        <div id="feed">
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Voice active — Kore.</div>
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Agent online — sleeping.</div>
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Say "Agent" to wake me.</div>
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> HUD switched to reactor core.</div>
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Wake word engine idle.</div>
-          <div class="msg msg-sys"><span class="sys-badge">SYS</span> Microphone check passed.</div>
+        <div class="card-activity-log">
+          <div class="act-header">
+            <p class="act-title">Activity log</p>
+            <span class="act-badge">live</span>
+          </div>
+          <div id="feed"></div>
+          <button id="btn-jump-latest" class="btn-jump-latest" onclick="jumpToLatest()" aria-label="Jump to latest messages">
+            <i class="ti ti-arrow-down" aria-hidden="true"></i><span>Latest</span>
+          </button>
         </div>
         <div class="act-foot-badges">
           <div class="act-badge-item" id="badge-sec">
@@ -1462,14 +2327,17 @@
         <div class="audio-bar" style="height:10px"></div>
         <div class="audio-bar" style="height:18px"></div>
       </div>
+      <button class="btn-attach" id="btn-attach" type="button" onclick="document.getElementById('file-inp').click()" aria-label="Attach file" title="Attach file">
+        <i class="ti ti-paperclip" aria-hidden="true"></i>
+      </button>
       <button class="btn-send" onclick="doSend()" aria-label="Send" title="Send command">
         <i class="ti ti-send" aria-hidden="true"></i>
       </button>
       <button class="btn-interrupt" onclick="doInterrupt()" title="Interrupt assistant">
-        <i class="ti ti-hand-stop" aria-hidden="true"></i>Interrupt
+        <i class="ti ti-player-stop" aria-hidden="true"></i><span class="btn-interrupt-text">Interrupt</span>
       </button>
-      <button id="mic-btn" onclick="doMic()" title="Voice command">
-        <i class="ti ti-microphone" aria-hidden="true"></i><span>Mic active</span>
+      <button id="mic-btn" class="state-idle" onclick="doMic()" title="Voice — tap to speak">
+        <i class="ti ti-microphone" aria-hidden="true"></i><span>Mic</span>
       </button>
     </footer>
   </div>
@@ -1537,6 +2405,9 @@
       toast('Connected to AGENT');
       initVoiceAuthStatus();
       initAudioDeviceStatus();
+      if (_audioRouting) {
+        try { ws.send(JSON.stringify({ type: 'audio_routing', routing: _audioRouting, pause_mic_on_reply: _pauseMicWhileReplying })); } catch(_) {}
+      }
     };
     ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
     ws.onerror   = () => sys('Connection error.');
@@ -1550,6 +2421,9 @@
       if (m.type === 'metrics')       updateMetrics(m);
       if (m.type === 'voice_enroll_step') _onVoiceEnrollStep(m);
       if (m.type === 'voice_enroll_done') _onVoiceEnrollDone(m);
+      if (m.type === 'mic_state')     _onMicStateBroadcast(m);
+      if (m.type === 'audio_flush')   _flushPlaybackAudio();
+      if (m.type === 'audio_routing') _onAudioRoutingBroadcast(m.routing, m.pause_mic_on_reply);
     };
 
     function updateMetrics(m) {
@@ -1580,6 +2454,75 @@
       }
     }
 
+    // ── Feed auto-scroll & Jump to Latest ──────────────────────────────────────
+    let _userScrolledUp = false;
+
+    function _initFeedScroll() {
+      const feedEl = document.getElementById('feed');
+      const jumpBtn = document.getElementById('btn-jump-latest');
+      if (!feedEl) return;
+      feedEl.addEventListener('scroll', () => {
+        const distFromBottom = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight;
+        _userScrolledUp = distFromBottom > 60;
+        if (jumpBtn) {
+          if (_userScrolledUp) {
+            jumpBtn.classList.add('visible');
+          } else {
+            jumpBtn.classList.remove('visible');
+          }
+        }
+      });
+    }
+
+    function scrollToBottom(force = false) {
+      const feedEl = document.getElementById('feed');
+      if (!feedEl) return;
+      if (force || !_userScrolledUp) {
+        feedEl.scrollTop = feedEl.scrollHeight;
+        const jumpBtn = document.getElementById('btn-jump-latest');
+        if (jumpBtn) jumpBtn.classList.remove('visible');
+        if (force) _userScrolledUp = false;
+      }
+    }
+
+    function jumpToLatest() {
+      const feedEl = document.getElementById('feed');
+      if (!feedEl) return;
+      _userScrolledUp = false;
+      feedEl.scrollTo({ top: feedEl.scrollHeight, behavior: 'smooth' });
+      const jumpBtn = document.getElementById('btn-jump-latest');
+      if (jumpBtn) jumpBtn.classList.remove('visible');
+    }
+
+    // ── Mobile Controls Menu ──────────────────────────────────────────────────
+    function toggleRemote() {
+      toast('Remote control active');
+    }
+
+    function openMobileMenu() {
+      const m = document.getElementById('mobile-menu-modal');
+      if (!m) return;
+      const va = document.getElementById('va-sidebar-status');
+      const mva = document.getElementById('m-va-status');
+      if (va && mva) mva.textContent = va.textContent;
+
+      const aud = document.getElementById('audio-sidebar-status');
+      const maud = document.getElementById('m-audio-status');
+      if (aud && maud) maud.textContent = aud.textContent;
+
+      const wake = document.getElementById('wake-ctrl-label');
+      const mwake = document.getElementById('m-wake-status');
+      if (wake && mwake) {
+        mwake.textContent = wake.textContent.toLowerCase().includes('on') ? 'On' : 'Off';
+      }
+      m.classList.add('open');
+    }
+
+    function closeMobileMenu() {
+      const m = document.getElementById('mobile-menu-modal');
+      if (m) m.classList.remove('open');
+    }
+
     function append(speaker, text) {
       const d = document.createElement('div');
       if (speaker === 'jarvis') {
@@ -1590,7 +2533,7 @@
         d.innerHTML = `<div class="lbl">You</div><div>${esc(text)}</div>`;
       }
       feed.appendChild(d);
-      feed.scrollTop = feed.scrollHeight;
+      scrollToBottom();
     }
 
     function sys(text) {
@@ -1599,7 +2542,7 @@
       const clean = text.replace(/^SYS:?\s*/i, '');
       d.innerHTML = `<span class="sys-badge">SYS</span> ${esc(clean)}`;
       feed.appendChild(d);
-      feed.scrollTop = feed.scrollHeight;
+      scrollToBottom();
     }
 
     function esc(s) {
@@ -1634,11 +2577,15 @@
 
     // ── Interrupt ─────────────────────────────────────────────────────────────
     function doInterrupt() {
-      _authFetch('/api/command', {
+      // Local interrupt path matching desktop HUD AgentApp.interrupt
+      _authFetch('/api/interrupt', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'stop' })
-      });
+        headers: { 'Content-Type': 'application/json' }
+      }).catch(() => {});
+      if (ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'interrupt' })); } catch(_) {}
+      }
+      _flushPlaybackAudio();
       sys('Interrupt signal sent.');
       toast('Interrupt sent');
     }
@@ -1684,7 +2631,7 @@
         <div class="fc-status" id="${id}_st">0%</div>
       `;
       feed.appendChild(card);
-      feed.scrollTop = feed.scrollHeight;
+      scrollToBottom();
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload');
@@ -1751,7 +2698,7 @@
         <div class="fc-status done">✓</div>
       `;
       feed.appendChild(card);
-      feed.scrollTop = feed.scrollHeight;
+      scrollToBottom();
       toast('File received on computer!');
     }
 
@@ -1817,16 +2764,372 @@
     }
 
     // ── Real-time Voice — PCM16 WebSocket → Gemini Live ──────────────────────
+    // ── Real-time Voice & Downstream Playback ──────────────────────────────
     const micBtn  = document.getElementById('mic-btn');
     let _voiceWs  = null;
     let _audioCtx = null;
     let _micStm   = null;
     let _audioNd  = null;
 
+    // Single source of truth: 'idle' | 'streaming' | 'muted' | 'error'
+    let _micState = 'idle';
+    let _serverPhoneMic = false;
+    let _serverDesktopMuted = false;
+
+    // ── Audio Routing & Echo Control Options ──────────────────────────────
+    let _audioRouting = localStorage.getItem('jarvis_audio_routing') || 'phone';
+    let _pauseMicWhileReplying = localStorage.getItem('jarvis_pause_mic_on_reply') !== 'false';
+
+    function _onAudioRoutingBroadcast(r, pauseMic) {
+      if (['phone', 'laptop', 'both'].includes(r)) {
+        _audioRouting = r;
+        localStorage.setItem('jarvis_audio_routing', r);
+        _updateRoutingUI();
+      }
+      if (pauseMic !== undefined) {
+        _pauseMicWhileReplying = !!pauseMic;
+        localStorage.setItem('jarvis_pause_mic_on_reply', _pauseMicWhileReplying ? 'true' : 'false');
+        const pmt = document.getElementById('pause-mic-toggle');
+        if (pmt) pmt.checked = _pauseMicWhileReplying;
+      }
+    }
+
+    function setAudioRouting(route) {
+      if (!['phone', 'laptop', 'both'].includes(route)) return;
+      _audioRouting = route;
+      localStorage.setItem('jarvis_audio_routing', route);
+      _updateRoutingUI();
+      if (ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'audio_routing', routing: route, pause_mic_on_reply: _pauseMicWhileReplying })); } catch(_) {}
+      }
+      _authFetch('/api/audio-routing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ routing: route, pause_mic_on_reply: _pauseMicWhileReplying })
+      }).catch(() => {});
+      toast(`Replies on: ${route.charAt(0).toUpperCase() + route.slice(1)}`);
+    }
+
+    function _updateRoutingUI() {
+      const lbl = document.getElementById('routing-current-label');
+      if (lbl) lbl.textContent = _audioRouting;
+      ['phone', 'laptop', 'both'].forEach(r => {
+        const btn = document.getElementById(`route-btn-${r}`);
+        if (btn) btn.classList.toggle('active', _audioRouting === r);
+      });
+    }
+
+    function togglePauseMicOnReply(enabled) {
+      _pauseMicWhileReplying = !!enabled;
+      localStorage.setItem('jarvis_pause_mic_on_reply', _pauseMicWhileReplying ? 'true' : 'false');
+      if (ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify({ type: 'audio_routing', routing: _audioRouting, pause_mic_on_reply: _pauseMicWhileReplying })); } catch(_) {}
+      }
+      _authFetch('/api/audio-routing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ routing: _audioRouting, pause_mic_on_reply: _pauseMicWhileReplying })
+      }).catch(() => {});
+    }
+
+    // ── Screen Wake Lock API ──────────────────────────────────────────────
+    let _wakeLock = null;
+    async function _acquireWakeLock() {
+      if ('wakeLock' in navigator) {
+        try {
+          _wakeLock = await navigator.wakeLock.request('screen');
+          _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+        } catch (e) {
+          _wakeLock = null;
+        }
+      }
+    }
+    async function _releaseWakeLock() {
+      if (_wakeLock) {
+        try { await _wakeLock.release(); } catch (_) {}
+        _wakeLock = null;
+      }
+    }
+    let _wasInBackground = false;
+    let _lastHeartbeatSentTime = 0;
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'hidden') {
+        _wasInBackground = true;
+        // Do NOT tear down sockets just because page is hidden
+      } else if (document.visibilityState === 'visible') {
+        const now = Date.now();
+        const ctxSuspended = (_playbackAudioCtx && _playbackAudioCtx.state === 'suspended') || (_audioCtx && _audioCtx.state === 'suspended');
+        const hbGap = (_lastHeartbeatSentTime > 0) ? (now - _lastHeartbeatSentTime) : 0;
+        const hadHeartbeatGap = hbGap > 2000;
+
+        // Show background toast only if an AudioContext was suspended or heartbeat gap > 2s occurred (Task 1 Patch 3 Item 4)
+        if (_wasInBackground && (ctxSuspended || hadHeartbeatGap)) {
+          toast('Dashboard was in the background; audio may have paused');
+        }
+        _wasInBackground = false;
+
+        if (_playbackAudioCtx && _playbackAudioCtx.state === 'suspended') {
+          try { await _playbackAudioCtx.resume(); } catch (_) {}
+        }
+        if (_audioCtx && _audioCtx.state === 'suspended') {
+          try { await _audioCtx.resume(); } catch (_) {}
+        }
+        if ((_micState === 'streaming' || _voiceWs)) {
+          await _acquireWakeLock();
+        }
+        // Send immediate heartbeat on visibilitychange to visible (Task 1 Final Patch Item 3)
+        if (_voiceWs && _voiceWs.readyState === 1) {
+          try {
+            _voiceWs.send(JSON.stringify({ type: 'hb' }));
+            _lastHeartbeatSentTime = Date.now();
+          } catch (_) {}
+        }
+        if (_playbackWs && _playbackWs.readyState === 1) {
+          let rem = 0.0;
+          if (_playbackAudioCtx && _playbackNextTime > _playbackAudioCtx.currentTime) {
+            rem = Math.max(0.0, _playbackNextTime - _playbackAudioCtx.currentTime);
+          }
+          try {
+            _playbackWs.send(JSON.stringify({ type: 'hb', remaining_sec: parseFloat(rem.toFixed(3)) }));
+            _lastHeartbeatSentTime = Date.now();
+          } catch (_) {}
+        }
+      }
+    });
+
+    // ── Downstream Phone Playback (Web Audio API) ─────────────────────────
+    let _playbackAudioCtx = null;
+    let _playbackWs = null;
+    let _playbackNextTime = 0;
+    let _activeSources = [];
+    let _playbackRetryCount = 0;
+    let _playbackRetry1008Count = 0;
+    let _playbackRetryTimer = null;
+
+    function _ensurePlaybackCtx() {
+      if (!_playbackAudioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) _playbackAudioCtx = new AC();
+      }
+      if (_playbackAudioCtx && _playbackAudioCtx.state === 'suspended') {
+        _playbackAudioCtx.resume().catch(() => {});
+      }
+      return _playbackAudioCtx;
+    }
+
+    let _playbackHbTimer = null;
+    function _startPlaybackStream() {
+      if (_playbackWs && (_playbackWs.readyState === 0 || _playbackWs.readyState === 1)) return;
+      const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const devTok = localStorage.getItem('jarvis_device_token') || '';
+      const devParam = devTok ? `&device_token=${encodeURIComponent(devTok)}` : '';
+      const url = `${wsProto}://${location.host}/ws/phone-playback?token=${encodeURIComponent(_authToken)}${devParam}`;
+      try {
+        _playbackWs = new WebSocket(url);
+        _playbackWs.binaryType = 'arraybuffer';
+        _playbackWs.onopen = () => {
+          _playbackRetryCount = 0;
+          if (_playbackHbTimer) clearInterval(_playbackHbTimer);
+          _playbackHbTimer = setInterval(() => {
+            if (_playbackWs && _playbackWs.readyState === 1) {
+              let rem = 0.0;
+              if (_playbackAudioCtx && _playbackNextTime > _playbackAudioCtx.currentTime) {
+                rem = Math.max(0.0, _playbackNextTime - _playbackAudioCtx.currentTime);
+              }
+              try {
+                _playbackWs.send(JSON.stringify({ type: 'hb', remaining_sec: parseFloat(rem.toFixed(3)) }));
+                _lastHeartbeatSentTime = Date.now();
+              } catch (_) {}
+            }
+          }, 1000);
+        };
+        _playbackWs.onmessage = (e) => {
+          if (typeof e.data === 'string') {
+            try {
+              const m = JSON.parse(e.data);
+              if (m.type === 'audio_flush') _flushPlaybackAudio();
+            } catch (_) {}
+            return;
+          }
+          if (e.data instanceof ArrayBuffer) {
+            _handlePlaybackChunk(e.data);
+          }
+        };
+        _playbackWs.onclose = (event) => {
+          if (_playbackHbTimer) { clearInterval(_playbackHbTimer); _playbackHbTimer = null; }
+          _playbackWs = null;
+          const code = event?.code;
+
+          // Close code 4000 ("replaced"): must NOT reconnect (Task 1 Patch 3 Item 1)
+          if (code === 4000) {
+            if (_playbackRetryTimer) { clearTimeout(_playbackRetryTimer); _playbackRetryTimer = null; }
+            return;
+          }
+
+          // Close code 1008: retry once after 4s, then stop
+          if (code === 1008) {
+            if (_voiceDesired && _playbackRetry1008Count === 0) {
+              _playbackRetry1008Count = 1;
+              if (_playbackRetryTimer) clearTimeout(_playbackRetryTimer);
+              _playbackRetryTimer = setTimeout(async () => {
+                if (!_voiceDesired) return;
+                await _refreshAuthTokenIfNeeded();
+                _startPlaybackStream();
+              }, 4000);
+            }
+            return;
+          }
+
+          // Close code 4008 (rate limited) & unexpected network drops: normal backoff
+          if (_voiceDesired && _playbackRetryCount < 5) {
+            _playbackRetryCount++;
+            const delay = Math.min(_playbackRetryCount, 3) * 1000;
+            if (_playbackRetryTimer) clearTimeout(_playbackRetryTimer);
+            _playbackRetryTimer = setTimeout(async () => {
+              if (!_voiceDesired) return;
+              await _refreshAuthTokenIfNeeded();
+              _startPlaybackStream();
+            }, delay);
+          }
+        };
+        _playbackWs.onerror = () => {
+          if (_playbackHbTimer) { clearInterval(_playbackHbTimer); _playbackHbTimer = null; }
+          _playbackWs = null;
+        };
+      } catch (err) {
+        console.warn('[Playback] WS init error:', err);
+      }
+    }
+
+    function _stopPlaybackStream() {
+      if (_playbackRetryTimer) { clearTimeout(_playbackRetryTimer); _playbackRetryTimer = null; }
+      _playbackRetryCount = 0;
+      if (_playbackHbTimer) { clearInterval(_playbackHbTimer); _playbackHbTimer = null; }
+      if (_playbackWs) {
+        const w = _playbackWs;
+        _playbackWs = null;
+        if (w.readyState < 2) w.close();
+      }
+      _flushPlaybackAudio();
+    }
+
+    function _handlePlaybackChunk(ab) {
+      const ctx = _ensurePlaybackCtx();
+      if (!ctx) return;
+      const pcm16 = new Int16Array(ab);
+      if (pcm16.length === 0) return;
+
+      const f32 = new Float32Array(pcm16.length);
+      for (let i = 0; i < pcm16.length; i++) {
+        f32[i] = pcm16[i] / 32768.0;
+      }
+
+      // AudioBuffer created at 24000 Hz, natively resampled by Web Audio to device rate
+      const buf = ctx.createBuffer(1, f32.length, 24000);
+      buf.getChannelData(0).set(f32);
+
+      const now = ctx.currentTime;
+      if (_playbackNextTime < now) {
+        _playbackNextTime = now + 0.15; // 150 ms jitter cushion
+      }
+
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(_playbackNextTime);
+      _playbackNextTime += buf.duration;
+
+      _activeSources.push(src);
+      src.onended = () => {
+        const idx = _activeSources.indexOf(src);
+        if (idx !== -1) _activeSources.splice(idx, 1);
+      };
+    }
+
+    function _flushPlaybackAudio() {
+      for (const s of _activeSources) {
+        try { s.stop(); } catch (_) {}
+      }
+      _activeSources = [];
+      _playbackNextTime = 0;
+    }
+
+    function _isReplyingActive() {
+      if (_activeSources.length > 0) return true;
+      if (_playbackAudioCtx && _playbackNextTime > _playbackAudioCtx.currentTime + 0.05) return true;
+      return false;
+    }
+
+    // ── Mic State Management ──────────────────────────────────────────────
+    let _phoneMuted = false;
+
+    function _setMicState(state, errorMsg = '') {
+      _micState = state;
+      const btn = document.getElementById('mic-btn');
+      if (!btn) return;
+      btn.classList.remove('state-idle', 'state-streaming', 'state-muted', 'state-error', 'state-reconnecting', 'recording');
+
+      if (state === 'streaming') {
+        btn.classList.add('state-streaming', 'recording');
+        btn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i><span>Live</span>';
+        btn.title = 'Phone mic live — tap to stop';
+      } else if (state === 'reconnecting') {
+        btn.classList.add('state-reconnecting');
+        btn.innerHTML = '<i class="ti ti-refresh" style="animation:spin 1s linear infinite" aria-hidden="true"></i><span>Reconnecting</span>';
+        btn.title = 'Reconnecting microphone...';
+      } else if (state === 'muted') {
+        btn.classList.add('state-muted');
+        btn.innerHTML = '<i class="ti ti-microphone-off" aria-hidden="true"></i><span>Muted</span>';
+        btn.title = 'Phone mic muted — tap to unmute';
+      } else if (state === 'error') {
+        btn.classList.add('state-error');
+        btn.innerHTML = '<i class="ti ti-alert-triangle" aria-hidden="true"></i><span>Error</span>';
+        btn.title = errorMsg || 'Microphone error — tap to retry';
+      } else {
+        _micState = 'idle';
+        btn.classList.add('state-idle');
+        btn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i><span>Mic</span>';
+        btn.title = 'Voice — tap to speak';
+      }
+    }
+
+    function _updateLaptopMicIndicator(isMuted) {
+      const el = document.getElementById('laptop-mic-badge');
+      if (el) {
+        el.style.display = isMuted ? 'inline-flex' : 'none';
+      }
+      const mBadge = document.getElementById('m-laptop-mic-status');
+      if (mBadge) {
+        if (isMuted) {
+          mBadge.textContent = 'Muted';
+          mBadge.className = 'ctrl-badge danger';
+        } else {
+          mBadge.textContent = 'Active';
+          mBadge.className = 'ctrl-badge active';
+        }
+      }
+    }
+
+    function _onMicStateBroadcast(m) {
+      _serverPhoneMic = !!m.phone;
+      _serverDesktopMuted = !!m.desktop_muted;
+      _updateLaptopMicIndicator(_serverDesktopMuted);
+      _syncMicStateUI();
+    }
+
+    function _syncMicStateUI() {
+      if (_micState === 'error' || _micState === 'reconnecting') return; // Preserve local error or reconnecting state
+      if (_phoneMuted) {
+        _setMicState('muted');
+      } else if (_micState === 'streaming' || _voiceWs || _serverPhoneMic) {
+        _setMicState('streaming');
+      } else {
+        _setMicState('idle');
+      }
+    }
+
     function _micIdle() {
-      micBtn.innerHTML = '<i class="ti ti-microphone" aria-hidden="true"></i><span>Mic active</span>';
-      micBtn.title     = 'Voice — tap to speak';
-      micBtn.classList.remove('recording');
+      _syncMicStateUI();
     }
 
     // Float32 PCM → resample to 16 kHz + convert to Int16
@@ -1841,7 +3144,7 @@
       }
       const out = new Int16Array(s.length);
       for (let i = 0; i < s.length; i++)
-        out[i] = Math.max(-32768, Math.min(32767, Math.round(s[i] * 32768)));
+        out[i] = Math.max(-32768, Math.min(32767, Math.round(s[i] * 32767)));
       return out.buffer;
     }
 
@@ -1866,18 +3169,73 @@
         '<li>Return here and tap 🎤</li>' +
         '</ol>';
       feed.appendChild(card);
-      feed.scrollTop = feed.scrollHeight;
+      scrollToBottom();
       card.querySelector('#flags-url').addEventListener('click', () => {
         navigator.clipboard?.writeText(origin).then(() => toast('URL copied!')).catch(() => {});
       });
     }
 
+    let _voiceDesired = false;
+    let _voiceRetryCount = 0;
+    let _retry1008Count = 0;
+    let _voiceRetryTimer = null;
+
+    function _showTakeBackBanner() {
+      const existing = document.getElementById('take-back-banner');
+      if (existing) existing.remove();
+      const banner = document.createElement('div');
+      banner.id = 'take-back-banner';
+      banner.className = 'feed-item';
+      banner.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);padding:10px 14px;border-radius:10px;margin:8px 0;animation:pop 0.18s ease;';
+      banner.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;color:#f87171;font-size:13px;font-weight:500;">
+          <i class="ti ti-alert-triangle" aria-hidden="true"></i>
+          <span>Another session took over this stream</span>
+        </div>
+        <button id="take-back-btn" class="btn btn-sm" style="background:var(--green-accent);color:#07090f;font-weight:600;padding:5px 12px;border-radius:6px;border:none;cursor:pointer;" onclick="this.closest('#take-back-banner').remove();doMic();">Take back</button>
+      `;
+      const feedEl = document.getElementById('feed');
+      if (feedEl) {
+        feedEl.appendChild(banner);
+        scrollToBottom();
+      }
+    }
+
+    async function _refreshAuthTokenIfNeeded() {
+      const devTok = localStorage.getItem('jarvis_device_token');
+      if (!devTok) return _authToken;
+      try {
+        const res = await fetch('/api/device-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_token: devTok })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok && data.token) {
+            _authToken = data.token;
+            sessionStorage.setItem('jarvis_token', data.token);
+            if (data.key) sessionStorage.setItem('jarvis_key', data.key);
+          }
+        }
+      } catch (_) {}
+      return _authToken;
+    }
+
     function _startVoice(isEnrollment = false) {
       if (_voiceWs && _voiceWs.readyState === 1) return Promise.resolve(true);
 
+      _ensurePlaybackCtx();
+
       if (!navigator.mediaDevices?.getUserMedia) {
+        _setMicState('error', 'Microphone not supported');
         _showVoiceSetup();
         return Promise.reject(new Error('Microphone not supported on this browser context'));
+      }
+
+      if (!isEnrollment) {
+        _voiceDesired = true;
+        if (_voiceRetryTimer) { clearTimeout(_voiceRetryTimer); _voiceRetryTimer = null; }
       }
 
       return new Promise(async (resolve, reject) => {
@@ -1887,6 +3245,7 @@
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
+            autoGainControl: true,
           };
           const prefId = localStorage.getItem('agent_preferred_mic_id');
           if (prefId) {
@@ -1897,13 +3256,14 @@
           } catch (devErr) {
             if (prefId) {
               stream = await navigator.mediaDevices.getUserMedia({
-                audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+                audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
               });
             } else {
               throw devErr;
             }
           }
         } catch (e) {
+          _setMicState('error', e.name === 'NotAllowedError' ? 'Microphone permission denied' : e.message);
           sys(e.name === 'NotAllowedError'
             ? 'Microphone denied — tap the address bar lock and allow microphone.'
             : 'Mic error: ' + e.message);
@@ -1917,14 +3277,29 @@
 
         const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
         const purposeParam = isEnrollment ? '&purpose=enrollment' : '';
+        const devTok = localStorage.getItem('jarvis_device_token') || '';
+        const devParam = devTok ? `&device_token=${encodeURIComponent(devTok)}` : '';
         const ws = new WebSocket(
-          `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(_authToken)}${purposeParam}`
+          `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(_authToken)}${purposeParam}${devParam}`
         );
         ws.binaryType = 'arraybuffer';
 
         let opened = false;
+        let _voiceHbTimer = null;
         ws.onopen = async () => {
           opened = true;
+          _voiceRetryCount = 0;
+          const tb = document.getElementById('take-back-banner');
+          if (tb) tb.remove();
+          if (_voiceHbTimer) clearInterval(_voiceHbTimer);
+          _voiceHbTimer = setInterval(() => {
+            if (ws && ws.readyState === 1) {
+              try {
+                ws.send(JSON.stringify({ type: 'hb' }));
+                _lastHeartbeatSentTime = Date.now();
+              } catch (_) {}
+            }
+          }, 1000);
           const rate = ctx.sampleRate;
           const src  = ctx.createMediaStreamSource(stream);
 
@@ -1936,6 +3311,10 @@
             const nd = new AudioWorkletNode(ctx, 'j');
             let _pbuf = [], _plen = 0;
             nd.port.onmessage = e => {
+              if (_pauseMicWhileReplying && _isReplyingActive()) {
+                _pbuf = []; _plen = 0;
+                return;
+              }
               const chunk = new Int16Array(_f32toPcm16(e.data, rate));
               _pbuf.push(chunk); _plen += chunk.length;
               if (_plen >= 1024) {
@@ -1950,30 +3329,109 @@
           } catch (_) {
             const sp = ctx.createScriptProcessor(4096, 1, 1);
             sp.onaudioprocess = e => {
+              if (_pauseMicWhileReplying && _isReplyingActive()) return;
               if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
             };
             src.connect(sp); sp.connect(ctx.destination);
             _audioNd = sp;
           }
 
+          await _acquireWakeLock();
           if (!isEnrollment) {
-            micBtn.innerHTML = '<i class="ti ti-hand-stop" aria-hidden="true"></i><span>Recording…</span>';
-            micBtn.title     = 'Tap to stop';
-            micBtn.classList.add('recording');
+            _startPlaybackStream();
+            _setMicState('streaming');
             sys('Voice live — speak now');
             toast('🎤 Live');
           }
           resolve(true);
         };
 
-        ws.onclose = () => {
+        ws.onclose = async (event) => {
+          if (_voiceHbTimer) { clearInterval(_voiceHbTimer); _voiceHbTimer = null; }
+          _voiceWs = null;
           if (!opened) reject(new Error('WebSocket closed before open'));
-          _stopVoice();
+
+          const code = event?.code;
+
+          // 1. Close code 4000 ("replaced"): must NOT reconnect (Task 1 Patch 3 Item 1)
+          if (code === 4000) {
+            _voiceDesired = false;
+            _voiceRetryCount = 0;
+            _retry1008Count = 0;
+            if (_voiceRetryTimer) { clearTimeout(_voiceRetryTimer); _voiceRetryTimer = null; }
+            _stopVoice(true);
+            _setMicState('error', 'Another session took over this stream');
+            sys('Another session took over this stream.');
+            toast('Another session took over this stream');
+            _showTakeBackBanner();
+            return;
+          }
+
+          // 2. Close code 1008 (different device active): retry once after 4s, then stop
+          if (code === 1008) {
+            if (_voiceDesired && !isEnrollment && _retry1008Count === 0) {
+              _retry1008Count = 1;
+              _setMicState('reconnecting');
+              sys('Another device active — retrying once in 4s...');
+              if (_voiceRetryTimer) clearTimeout(_voiceRetryTimer);
+              _voiceRetryTimer = setTimeout(async () => {
+                if (!_voiceDesired) return;
+                try {
+                  await _refreshAuthTokenIfNeeded();
+                  await _startVoice(false);
+                } catch (err) {
+                  console.warn('[Voice] 1008 retry failed:', err);
+                }
+              }, 4000);
+              return;
+            } else {
+              _voiceDesired = false;
+              _retry1008Count = 0;
+              _setMicState('error', 'Another device is currently using the stream');
+              sys('Another device is currently using the stream.');
+              toast('Stream unavailable: another device active');
+              _stopVoice(true);
+              return;
+            }
+          }
+
+          // 3. Close code 4008 (takeover rate limited) & unexpected network drops (1s, 2s, 3s, max 5 tries):
+          // On 4008, continue normal backoff retries (do NOT show "Another device is currently using the stream")
+          const shouldRetry = _voiceDesired && !isEnrollment && _voiceRetryCount < 5;
+          if (shouldRetry) {
+            _voiceRetryCount++;
+            _setMicState('reconnecting');
+            const delay = Math.min(_voiceRetryCount, 3) * 1000;
+            if (_voiceRetryTimer) clearTimeout(_voiceRetryTimer);
+            _voiceRetryTimer = setTimeout(async () => {
+              if (!_voiceDesired) return;
+              try {
+                await _refreshAuthTokenIfNeeded();
+                await _startVoice(false);
+              } catch (err) {
+                console.warn('[Voice] Reconnect failed:', err);
+              }
+            }, delay);
+            return;
+          }
+
+          if (_voiceDesired && !isEnrollment && _voiceRetryCount >= 5) {
+            _voiceDesired = false;
+            _setMicState('error', 'Reconnection failed — tap to retry');
+            _stopVoice(true);
+            return;
+          }
+
+          _stopVoice(false);
         };
         ws.onerror = (err) => {
-          sys('Voice connection failed.');
-          if (!opened) reject(new Error('Voice connection failed'));
-          _stopVoice();
+          if (_voiceHbTimer) { clearInterval(_voiceHbTimer); _voiceHbTimer = null; }
+          if (!_voiceDesired || isEnrollment || _voiceRetryCount >= 5) {
+            sys('Voice connection failed.');
+            if (!opened) reject(new Error('Voice connection failed'));
+            _setMicState('error', 'Voice connection failed');
+            _stopVoice(true);
+          }
         };
 
         _voiceWs  = ws;
@@ -1983,13 +3441,30 @@
     }
 
     async function doMic() {
-      if (_voiceWs) { _stopVoice(); return; }
+      _ensurePlaybackCtx();
+      if (_micState === 'streaming' || _micState === 'reconnecting' || _voiceWs) {
+        _voiceDesired = false;
+        _voiceRetryCount = 0;
+        if (_voiceRetryTimer) { clearTimeout(_voiceRetryTimer); _voiceRetryTimer = null; }
+        _stopVoice(false);
+        return;
+      }
+      if (_micState === 'error') {
+        _setMicState('idle');
+      }
       try {
+        _voiceRetryCount = 0;
+        _retry1008Count = 0;
+        _playbackRetryCount = 0;
+        _playbackRetry1008Count = 0;
         await _startVoice(false);
       } catch (_) {}
     }
 
-    function _stopVoice() {
+    function _stopVoice(preserveError = false) {
+      _releaseWakeLock();
+      _stopPlaybackStream();
+      if (_voiceRetryTimer) { clearTimeout(_voiceRetryTimer); _voiceRetryTimer = null; }
       if (_audioNd)  { try { _audioNd.disconnect(); }  catch (_) {}; _audioNd  = null; }
       if (_audioCtx) { try { _audioCtx.close(); }      catch (_) {}; _audioCtx = null; }
       if (_micStm)   { _micStm.getTracks().forEach(t => t.stop()); _micStm = null; }
@@ -1997,7 +3472,9 @@
         const w = _voiceWs; _voiceWs = null;
         if (w.readyState < 2) w.close();
       }
-      _micIdle();
+      if (!preserveError && _micState !== 'reconnecting') {
+        _syncMicStateUI();
+      }
     }
 
     // ── Memory Modal ──────────────────────────────────────────────────────────
@@ -2612,12 +4089,18 @@
     }
 
     initAudioDeviceStatus();
+    _initFeedScroll();
+    _updateRoutingUI();
+    const _pmt = document.getElementById('pause-mic-toggle');
+    if (_pmt) _pmt.checked = _pauseMicWhileReplying;
+    _syncMicStateUI();
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeMemoryModal();
         handleVoiceModalDismiss();
         closeAudioModal();
+        closeMobileMenu();
       }
     });
   </script>

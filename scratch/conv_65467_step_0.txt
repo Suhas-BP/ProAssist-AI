@@ -1,0 +1,242 @@
+<USER_REQUEST>
+CONSTRAINTS (do not violate):
+- This is an AUDIT ONLY. Do not write, modify, refactor, or delete any
+  code. Do not create new files, new action modules, or new directories
+  (permissions/, agent/orchestrator.py, agent/context.py, agent/memory.py,
+  logs/, etc.) even if the spec below calls for them.
+- Do not "fix" anything you find broken while auditing — just report it.
+- Investigate by reading actual source files (not assuming from names/
+  docstrings) — open each relevant action module and check what's really
+  implemented versus what's stubbed, partially working, or missing.
+- If something is ambiguous (e.g. partially implemented in one file but
+  referenced elsewhere), say so explicitly rather than rounding up to
+  "working" or down to "missing."
+- Output must be a single structured report, organized by the section
+  numbers below, not a code diff or implementation.
+
+TASK
+Audit my actual current codebase (ProAssist AI / Mark LIV) against the
+spec below and produce a gap report.
+
+For EACH numbered section in the spec, report:
+1. STATUS — FULLY IMPLEMENTED / PARTIALLY IMPLEMENTED / STUBBED (exists
+   but non-functional) / MISSING ENTIRELY.
+2. EVIDENCE — the actual file(s) and function/class names that implement
+   this (or the closest existing equivalent), with a one-line description
+   of what they currently do. If missing, say what file it would
+   logically belong in given the existing structure.
+3. GAP — specifically what's missing or different from the spec.
+4. RISK/SAFETY GAP — separately flag anywhere the CURRENT implementation
+   violates the spec's safety requirements specifically (command
+   classification in section 6, permission levels in section 18, "never
+   silently download" in section 7, deletion confirmation in section 5,
+   etc.) — prioritize these over missing features.
+5. EFFORT ESTIMATE — rough scope to close the gap (small/medium/large).
+
+After the section breakdown, add:
+- A CONSOLIDATED SAFETY GAP LIST — every place the current agent could
+  execute something the spec says should require confirmation or should
+  be blocked, sorted by severity. This is the most important part.
+- A PRIORITIZED GAP LIST — everything else, ordered by (a) safety-adjacent
+  items, (b) already-partially-built items (cheapest to finish), (c)
+  net-new subsystems (orchestrator, permission system, memory, context)
+  last.
+
+Do not propose an implementation plan or timeline in this pass — just
+report where things actually stand.
+
+=== SPEC BEGINS ===
+
+1. CORE REQUIREMENT
+
+The agent must be capable of interacting with my Windows computer, including:
+Controlling mouse, Clicking UI elements, Typing text, Keyboard shortcuts,
+Opening applications, Closing applications, Switching/focusing windows,
+Reading the current screen, Taking screenshots, Working with files and
+folders, Opening websites, Downloading files, Running terminal commands,
+Running development tools, Controlling supported Windows settings,
+Monitoring system resources, Creating reminders/timers, Performing
+multi-step tasks, Verifying whether an action succeeded.
+
+The agent must NEVER blindly execute dangerous or sensitive actions.
+
+2. EXISTING ACTION MODULES
+
+actions/
+├── computer_control.py
+├── computer_settings.py
+├── desktop.py
+├── dev_agent.py
+├── flight_finder.py
+├── game_updater.py
+├── reminder.py
+├── system_monitor.py
+├── background_monitor.py
+├── proactive.py
+└── code_helper.py
+
+Use these as the foundation. Do NOT duplicate functionality unnecessarily.
+Refactor into a consistent tool interface if required.
+
+3. COMPUTER CONTROL — actions/computer_control.py
+Capabilities: move mouse, left/right/double click, drag, scroll, type
+text, press keys, keyboard shortcuts, hotkeys, detect active window,
+focus window, minimize/maximize/restore, take screenshots, locate UI
+elements where possible, basic screen interaction.
+Libraries: PyAutoGUI, PyGetWindow, PyWin32, Windows UI Automation, OCR
+when required.
+Prefer: UI element detection → window/app detection → OCR →
+coordinate-based interaction, with coordinates as fallback only.
+
+4. COMPUTER SETTINGS — actions/computer_settings.py
+Support: volume, mute/unmute, brightness, Wi-Fi status, Bluetooth status,
+battery status, power info, basic Windows settings.
+Every operation must return structured results, e.g.:
+{"success": true, "action": "set_volume", "value": 50, "message": "Volume changed to 50%"}
+
+5. DESKTOP CONTROL — actions/desktop.py
+Support: desktop file/folder listing, open desktop files, create folders,
+rename/move files, minimize windows, show desktop, change wallpaper, open/
+close applications.
+File deletion must ALWAYS require explicit user confirmation.
+
+6. DEVELOPMENT AGENT — actions/dev_agent.py
+Capabilities: open terminal, execute CLI commands, read terminal output,
+run Python/Node/npm/git, run build commands, inspect project directories,
+diagnose errors, start/stop dev servers, analyze logs.
+Never allow unrestricted arbitrary command execution from the LLM. Create
+a command security layer classifying commands:
+- SAFE: python --version, node --version, git status, dir, cd, npm --version
+- REQUIRES_CONFIRMATION: npm install, git push, pip install, docker
+  commands, system configuration, network changes
+- BLOCKED by default: disk formatting, credential extraction, destructive
+  filesystem operations, security bypasses, commands designed to disable
+  security protections
+User should be able to explicitly authorize an operation when appropriate.
+
+7. DOWNLOAD SYSTEM
+Agent must understand a download request, determine the official source,
+navigate to the site, identify the correct download, tell the user what
+it intends to download, and ASK PERMISSION before downloading (naming
+file, source, destination), wait for permission, perform the download,
+verify the file, report the result. NEVER silently download executables,
+installers, or potentially dangerous files.
+
+8. FILE OPERATIONS
+Dedicated file tool supporting: list, search, open, create, copy, move,
+rename, read, write files.
+Require confirmation for: delete, overwrite important files, bulk rename,
+bulk move, bulk modification.
+Must understand natural language multi-step requests (e.g. "put all my
+PDFs from Downloads into a folder called College") and plan: inspect →
+identify → create folder → ask permission if required → move → verify.
+
+9. APPLICATION CONTROL
+Discover and launch installed applications (find → launch → wait for
+startup → verify window exists). Support common apps (Chrome, Edge, VS
+Code, Notepad, File Explorer, Terminal, PowerShell, Discord, Spotify,
+Steam, others) via application discovery — do NOT hardcode only these.
+
+10. BROWSER CONTROL
+Browser automation layer: open browser, navigate to URL, search the web,
+click links, fill forms, download files, read page content, navigate/
+close/switch tabs. Prefer Playwright where appropriate.
+For sensitive actions (purchasing, sending messages/emails, posting
+publicly, changing account settings, entering payment info): ALWAYS
+request confirmation immediately before the final action.
+
+11. SYSTEM MONITOR — actions/system_monitor.py
+Monitor CPU, RAM, GPU where available, disk usage, network usage,
+battery, running processes, temperature where available. On "why is my
+computer slow," inspect CPU/RAM/disk/processes/network and explain based
+on observed data. Do not kill processes automatically unless explicitly
+authorized.
+
+12. BACKGROUND MONITOR — actions/background_monitor.py
+Allow monitoring of RSS feeds, news/topic feeds, system conditions,
+long-running tasks, application state. Must run independently from the
+main agent via scheduled/background workers.
+
+13. REMINDER SYSTEM — actions/reminder.py
+Support one-off, next-day, timer, and recurring reminders. Store locally.
+Provide create/list/update/delete.
+
+14. PROACTIVE ASSISTANT — actions/proactive.py
+Suggestions based on observed context (low battery, long-running dev
+server, low disk, upcoming reminder). Must NOT automatically perform
+consequential actions — only suggest and ask permission.
+
+15. CODE HELPER — actions/code_helper.py
+Generate, explain, debug, review, refactor code; analyze errors; suggest
+fixes. Integrates with dev_agent.py. Example flow for "fix the error in my
+Node project": locate project → inspect package.json → run project →
+capture error → analyze → propose fix → ask permission → apply fix → run
+tests/build → verify.
+
+16. AGENT ORCHESTRATOR — agent/orchestrator.py
+The brain: USER REQUEST → UNDERSTAND INTENT → CREATE PLAN → SELECT TOOLS →
+CHECK PERMISSIONS → EXECUTE → OBSERVE RESULT → VERIFY → RECOVER IF NEEDED
+→ REPORT RESULT. Must support multi-step tasks (example: open Chrome,
+search latest Python version, download it, put installer on desktop —
+with a 10-step plan including permission checks and verification).
+
+17. TOOL INTERFACE
+Every action exposes a consistent interface, e.g.:
+class AgentTool:
+    name: str
+    description: str
+    def execute(self, **kwargs): ...
+Every tool returns:
+{"success": True, "tool": "...", "action": "...", "result": "...", "error": None}
+Never inconsistent formats between tools.
+
+18. PERMISSION SYSTEM — permissions/permission_manager.py, policies.py, audit.py
+Classify operations:
+- LEVEL 0 SAFE (auto-execute): read screen, get CPU usage, get battery,
+  get volume, open calculator, list files, read non-sensitive files
+- LEVEL 1 USER CONFIRMATION: download executable, install software,
+  modify files, move files, change settings, package installation, git
+  push, send messages
+- LEVEL 2 STRONG CONFIRMATION: delete files, bulk file operations,
+  financial transactions, publishing content, sending important emails,
+  changing security settings
+- LEVEL 3 BLOCKED (never execute autonomously): credential theft,
+  security bypass, malware, destructive system commands, disabling
+  security mechanisms, unauthorized access
+
+19. PERMISSION UX
+A clean confirmation interface showing action, details (file, source,
+destination), a risk note ("this file can execute on your PC"), and
+Allow/Deny. Agent must pause execution until permission is received.
+
+20. SCREEN / COMPUTER CONTEXT — agent/context.py
+Maintain: current active application, current window, current screen
+screenshot, open applications, current directory, recent action, previous
+action result. Do not continuously capture screenshots unnecessarily —
+only when needed.
+
+21. MEMORY — agent/memory.py
+Local memory for: user preferences, frequently used applications,
+preferred download directory, common projects, automation preferences.
+Do NOT store passwords, auth tokens, API keys, or other secrets in plain
+text.
+
+22. ERROR RECOVERY
+Every action must handle failures: click failed → check screenshot →
+locate element again → retry → if still failed, ask user / report
+failure. Agent must never claim an action succeeded unless it has
+evidence.
+
+23. OBSERVABILITY — logs/
+Log: timestamp, user request, plan, tool selected, action, permission
+decision, result, error, verification. Do NOT log passwords, tokens,
+private keys, or sensitive user data.
+
+=== SPEC ENDS ===
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-24T07:47:16+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Gemini 3.8 Flash (High). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

@@ -34,6 +34,7 @@ for _stream in ("stdout", "stderr"):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+from collections import deque
 import asyncio
 import re
 import socket
@@ -83,6 +84,9 @@ from core.permission_manager   import (
     PermissionLevel, check_permission, verify_permission_gates, SecurityPolicyError,
 )
 from core.logger               import ActionLogger
+
+PHONE_MIC_TAIL_HOLDOFF: float = 0.4  # Seconds to hold off phone mic after reply ends to absorb device buffer latency
+INTERRUPT_IDLE_TIMEOUT: float = 3.0  # Seconds of chunk silence before interrupted guard clears automatically (Task 1 Patch 3)
 from agent.context             import AgentContext
 from agent.orchestrator        import PlanExecutor, StepCall, PlanCollisionError
 from agent.planner             import (
@@ -651,6 +655,9 @@ class AgentLive:
         self._is_speaking         = False
         self._speaking_lock       = threading.Lock()
         self._phone_active        = False   # True while phone mic is streaming; pauses PC mic
+        self._pause_mic_on_reply  = True    # Configured via mobile menu; drops phone mic while replying
+        self._phone_tail_holdoff_until = 0.0 # Monotonic time until post-reply echo tail holdoff expires
+        self._phone_play_end      = 0.0     # Expected playback end time in phone-only mode (Item 4)
         self._pending_vision       = None    # (img_bytes, mime_type, question, angle) to inject after tool response
         self._vision_cam_active    = False   # True if camera was opened for vision → auto-close after response
         self._vision_close_pending = False   # True after vision injected; next turn_complete closes camera
@@ -659,6 +666,11 @@ class AgentLive:
         self._action_in_flight     = False   # Command-execution lock: True while a tool/action is executing
         self._action_cooldown_until = 0.0    # Monotonic time until post-action cooldown expires (absorbs app sounds)
         self._interrupted          = False   # True while draining audio after user interrupt
+        self._interrupted_time     = 0.0     # Monotonic time of last interrupt (Task 1 Final Patch)
+        self._last_interrupted_chunk_time = 0.0 # Monotonic time of last chunk during interrupted state
+        self._interrupted_safety_task = None # Auto-clear task after INTERRUPT_IDLE_TIMEOUT (3.0s) silence
+        self._phone_reply_buffer   = []      # List of (chunk_bytes, chunk_sec) for current reply, capped at 60s (Task 1 Patch 3)
+        self._phone_reply_dur      = 0.0     # Total duration in self._phone_reply_buffer
         # Transcript-driven mouth shapes for the avatar. Fed from the receive
         # loop as words arrive, drained by the playback loop against the audio.
         self._visemes              = VisemeStream()
@@ -695,6 +707,16 @@ class AgentLive:
         self.ui.on_interrupt      = self.interrupt
         self.ui.on_voice_change   = self._on_voice_change     # voice picker → rebuild session
         self.ui.on_audio_device_change = self._on_audio_device_change
+        if hasattr(self.ui, "_win") and hasattr(self.ui._win, "_mute_sig"):
+            try:
+                self.ui._win._mute_sig.connect(self._on_desktop_mute_changed)
+            except Exception:
+                pass
+        elif hasattr(self.ui, "on_mute_changed"):
+            try:
+                self.ui.on_mute_changed = self._on_desktop_mute_changed
+            except Exception:
+                pass
         self._reconnect_event: asyncio.Event | None = None
         self._reconnect_keep = True   # False → next rebuild drops the resumption handle
         self._current_user_request = ""
@@ -1163,6 +1185,7 @@ class AgentLive:
         if not loop or not self.session:
             return
 
+        self._clear_interrupted()
         if loop.is_running():
             asyncio.run_coroutine_threadsafe(
                 self.session.send_client_content(
@@ -1192,6 +1215,7 @@ class AgentLive:
             # Hold the guard open across the device's own output latency plus a
             # cooldown margin to absorb trailing TTS echo and application sounds.
             self._tail_until = time.monotonic() + max(self._out_latency + _TAIL_MARGIN, 0.40)
+            self._phone_tail_holdoff_until = max(time.monotonic(), self._phone_play_end) + PHONE_MIC_TAIL_HOLDOFF
         if not value:
             # The echo history is deliberately NOT cleared here: the tail above
             # still needs it to recognise our own voice. It is dropped when the
@@ -1199,6 +1223,8 @@ class AgentLive:
             self._out_level = 0.0
         if value:
             self.ui.set_state("SPEAKING")
+        elif self._phone_active:
+            self.ui.set_state("LISTENING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
 
@@ -1243,9 +1269,52 @@ class AgentLive:
         except Exception:
             pass
 
+    def get_replay_chunks(self, target_sec: float) -> list[bytes]:
+        """Return the last target_sec of dispatched chunks from self._phone_reply_buffer (Task 1 Patch 3)."""
+        if not self._phone_reply_buffer or target_sec <= 0.0:
+            return []
+        selected = []
+        accum = 0.0
+        for chunk, dur in reversed(self._phone_reply_buffer):
+            selected.append(chunk)
+            accum += dur
+            if accum >= target_sec:
+                break
+        selected.reverse()
+        return selected
+
+    def _clear_interrupted(self) -> None:
+        """Clear interrupted state and cancel idle watchdog task (Task 1 Final Patch)."""
+        self._interrupted = False
+        if self._interrupted_safety_task and not self._interrupted_safety_task.done():
+            self._interrupted_safety_task.cancel()
+            self._interrupted_safety_task = None
+
     def interrupt(self) -> None:
         """Stop AGENT mid-speech: drain queued audio and open mic immediately."""
         self._interrupted = True
+        self._interrupted_time = time.monotonic()
+        self._last_interrupted_chunk_time = self._interrupted_time
+        self._phone_play_end = 0.0
+        self._phone_tail_holdoff_until = 0.0
+        self._phone_reply_buffer.clear()
+        self._phone_reply_dur = 0.0
+        if self._interrupted_safety_task and not self._interrupted_safety_task.done():
+            self._interrupted_safety_task.cancel()
+        try:
+            loop = self._loop or asyncio.get_event_loop()
+            if loop and loop.is_running():
+                async def _idle_watchdog():
+                    # Clear only after INTERRUPT_IDLE_TIMEOUT (3.0s) with no incoming chunk for the interrupted turn
+                    while self._interrupted:
+                        await asyncio.sleep(0.1)
+                        if time.monotonic() - self._last_interrupted_chunk_time >= INTERRUPT_IDLE_TIMEOUT:
+                            self._clear_interrupted()
+                            break
+                self._interrupted_safety_task = loop.create_task(_idle_watchdog())
+        except Exception:
+            pass
+
         q = self.audio_in_queue
         if q:
             drained = 0
@@ -1263,12 +1332,15 @@ class AgentLive:
         self._play_cursor = 0.0     # next batch starts a fresh timeline
         if self._turn_done_event:
             self._turn_done_event.clear()
+        if self._dashboard:
+            self._dashboard.flush_phone_playback()
         if self._is_speaking:
             self.ui.write_log("SYS: Interrupted — listening...")
 
     def speak(self, text: str):
         if not self._loop or not self.session:
             return
+        self._clear_interrupted()
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
                 turns={"role": "user", "parts": [{"text": text}]},
@@ -2021,8 +2093,15 @@ class AgentLive:
                             self._resume_handle = _sru.new_handle
 
                     if response.data:
+                        now_chunk = time.monotonic()
                         if self._interrupted:
-                            pass  # discard: interrupted
+                            # Idle timeout: if >= INTERRUPT_IDLE_TIMEOUT (3.0s) have passed since the last chunk, previous turn ended
+                            if now_chunk - self._last_interrupted_chunk_time >= INTERRUPT_IDLE_TIMEOUT:
+                                self._clear_interrupted()
+                            else:
+                                self._last_interrupted_chunk_time = now_chunk
+                        if self._interrupted:
+                            pass  # discard: late chunk from interrupted turn
                         else:
                             if self._turn_done_event and self._turn_done_event.is_set():
                                 self._turn_done_event.clear()
@@ -2036,7 +2115,14 @@ class AgentLive:
                     if response.server_content:
                         sc = response.server_content
 
-                        if sc.output_transcription and sc.output_transcription.text:
+                        if getattr(sc, "interrupted", False):
+                            self.interrupt()
+                            self._clear_interrupted()
+
+                        if getattr(sc, "generation_complete", False):
+                            self._clear_interrupted()
+
+                        if sc.output_transcription and sc.output_transcription.text and not self._interrupted:
                             txt = _clean_transcript(sc.output_transcription.text)
                             # A turn that involves a tool call passes through
                             # several turn_completes, and the API re-sends the
@@ -2053,11 +2139,15 @@ class AgentLive:
                                 # nothing measurable to the response path.
                                 self._visemes.feed_text(txt)
 
-                        if sc.input_transcription and sc.input_transcription.text:
-                            txt = _clean_transcript(sc.input_transcription.text)
-                            if txt:
-                                in_buf.append(txt)
-                                self._last_user_speech = time.monotonic()
+                        if sc.input_transcription:
+                            # User speech recognized by Gemini Live -> clear interrupted guard
+                            if self._interrupted:
+                                self._clear_interrupted()
+                            if sc.input_transcription.text:
+                                txt = _clean_transcript(sc.input_transcription.text)
+                                if txt:
+                                    in_buf.append(txt)
+                                    self._last_user_speech = time.monotonic()
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -2066,7 +2156,7 @@ class AgentLive:
                             # If this turn_complete ends an interrupted response, clear the
                             # flag and skip all further processing for that turn.
                             if self._interrupted:
-                                self._interrupted = False
+                                self._clear_interrupted()
                                 in_buf  = []
                                 out_buf = []
                                 self._visemes.reset()
@@ -2205,6 +2295,8 @@ class AgentLive:
                         timeout=0.1
                     )
                 except asyncio.TimeoutError:
+                    if time.monotonic() < self._phone_play_end:
+                        continue
                     if (
                         self._turn_done_event
                         and self._turn_done_event.is_set()
@@ -2217,6 +2309,8 @@ class AgentLive:
                 if not getattr(self, "_is_speaking", False):
                     if audio_devices.ensure_unmuted():
                         self.ui.write_log("SYS: Speaker was muted in Windows — unmuted for assistant speech.")
+                    self._phone_reply_buffer.clear()
+                    self._phone_reply_dur = 0.0
                 self.set_speaking(True)
 
                 # Batch all immediately-available chunks into one write to reduce
@@ -2237,37 +2331,15 @@ class AgentLive:
                     pcm = np.frombuffer(bytes(batch), dtype=np.int16)
                     hop = _VIS_HOP / RECEIVE_SAMPLE_RATE
                     frames = _pcm_visemes(pcm, sr=RECEIVE_SAMPLE_RATE)
-                    # When does this batch become audible? The stream was
-                    # started at launch and its callback has been pulling
-                    # silence ever since, so the first bytes of a reply reach
-                    # the speaker about one callback period later — NOT one
-                    # buffer later. `stream.latency` reports the buffer's
-                    # capacity, which is how much can be queued ahead, and on
-                    # Windows that is commonly 300-500 ms. Anchoring on it put
-                    # the entire schedule a buffer late; that is the half second
-                    # of lag, and it grew with whatever the device reported.
-                    #
-                    # After the anchor nothing needs measuring: the device
-                    # consumes at exactly realtime, so each batch sounds one
-                    # batch-duration after the one before it. The cursor is
-                    # re-anchored only when it leaves the range physically
-                    # possible — behind `now` means the device drained and this
-                    # batch starts a fresh stretch of speech, while further
-                    # ahead than the buffer can hold means it has drifted.
                     now = time.time()
                     horizon = self._out_latency + _CURSOR_SLACK
                     if not (now <= self._play_cursor <= now + horizon):
                         self._play_cursor = now + _FIRST_SOUND
                     at = self._play_cursor
-                    # Advance by the batch's own duration whether or not it
-                    # yielded frames, so a block too short to analyse cannot
-                    # shift everything after it out of step with the audio.
                     self._play_cursor += pcm.size / RECEIVE_SAMPLE_RATE
                     if frames:
                         frames = self._visemes.frames(frames, hop)
                         self.ui.push_visemes(frames, hop, at)
-                        # Barge-in needs to know what we are playing, not just
-                        # how loud: the guard subtracts this from the microphone.
                         self._out_level = max(f[0] for f in frames)
                         self._echo.note_output(pcm, RECEIVE_SAMPLE_RATE,
                                                self._out_level)
@@ -2279,10 +2351,95 @@ class AgentLive:
                 except Exception:
                     pass
 
-                try:
-                    await asyncio.to_thread(stream.write, bytes(batch))
-                except (RuntimeError, asyncio.CancelledError):
-                    break   # executor shutting down — exit cleanly
+                # Output routing: Phone / Laptop / Both
+                routing = "laptop"
+                if self._dashboard:
+                    routing = self._dashboard.get_audio_routing()
+
+                phone_live = self._phone_active or (self._dashboard is not None and self._dashboard.is_phone_mic_active())
+                route_phone = phone_live and (routing in ("phone", "both")) and (self._dashboard is not None) and self._dashboard.has_playback_clients()
+
+                # Check phone playback health (Task 1 Item 1: > 2s no heartbeat -> fallback)
+                if route_phone and not self._dashboard.is_playback_healthy(max_idle=2.0):
+                    print("[AGENT] ⚠️ Phone playback heartbeat lost (> 2s) — falling back to laptop")
+                    self.ui.write_log("SYS: Phone playback heartbeat lost — restored laptop playback.")
+                    self._dashboard.set_audio_routing("laptop")
+                    asyncio.create_task(self._dashboard.broadcast({
+                        "type": "sys",
+                        "text": "Phone playback heartbeat lost — restored laptop playback."
+                    }))
+                    self._dashboard.broadcast_mic_state_sync()
+                    route_phone = False
+                    # Task 1 Patch 3 Item 2: compute unplayed and replay last (unplayed + 0.5s) on laptop
+                    now_m = time.monotonic()
+                    unplayed = max(self._phone_play_end - now_m, 0.0)
+                    target_sec = unplayed + 0.5
+                    replay_chunks = self.get_replay_chunks(target_sec)
+                    self._phone_reply_buffer.clear()
+                    self._phone_reply_dur = 0.0
+                    if replay_chunks:
+                        for prev_c in replay_chunks:
+                            try:
+                                await asyncio.to_thread(stream.write, bytes(prev_c))
+                            except Exception:
+                                break
+
+                phone_ok = False
+                if route_phone:
+                    try:
+                        phone_ok = self._dashboard.send_phone_playback(bytes(batch))
+                    except Exception as pe:
+                        print(f"[AGENT] ⚠️ Phone playback send failed: {pe}")
+                        phone_ok = False
+
+                if phone_ok:
+                    chunk_sec = len(batch) / (RECEIVE_SAMPLE_RATE * 2)
+                    now_mono = time.monotonic()
+                    self._phone_play_end = max(now_mono, self._phone_play_end) + chunk_sec
+                    # Optional (Task 1 Final Patch Item 4): use remaining_sec to correct phone_play_end
+                    rem_sec = self._dashboard.get_phone_playback_remaining_sec()
+                    if rem_sec > 0.0:
+                        client_est = now_mono + rem_sec
+                        if client_est < self._phone_play_end:
+                            self._phone_play_end = client_est
+                    # Task 1 Patch 3 Item 2: buffer dispatched chunks capped at 60s
+                    self._phone_reply_buffer.append((bytes(batch), chunk_sec))
+                    self._phone_reply_dur += chunk_sec
+                    while self._phone_reply_dur > 60.0 and self._phone_reply_buffer:
+                        _, old_dur = self._phone_reply_buffer.pop(0)
+                        self._phone_reply_dur -= old_dur
+
+                if route_phone and not phone_ok:
+                    # Phone connection dropped or failed mid-reply -> restore laptop playback immediately
+                    # Item 6: only revert routing to laptop, do NOT reset _phone_active
+                    self.ui.write_log("SYS: Phone playback failed — restored laptop playback.")
+                    if self._dashboard:
+                        self._dashboard.set_audio_routing("laptop")
+                        asyncio.create_task(self._dashboard.broadcast({
+                            "type": "sys",
+                            "text": "Phone playback failed — restored laptop playback."
+                        }))
+                        self._dashboard.broadcast_mic_state_sync()
+                    # Task 1 Patch 3 Item 2: compute unplayed and replay last (unplayed + 0.5s) on laptop
+                    now_m = time.monotonic()
+                    unplayed = max(self._phone_play_end - now_m, 0.0)
+                    target_sec = unplayed + 0.5
+                    replay_chunks = self.get_replay_chunks(target_sec)
+                    self._phone_reply_buffer.clear()
+                    self._phone_reply_dur = 0.0
+                    if replay_chunks:
+                        for prev_c in replay_chunks:
+                            try:
+                                await asyncio.to_thread(stream.write, bytes(prev_c))
+                            except Exception:
+                                break
+
+                need_laptop = (routing == "both") or (not route_phone) or (not phone_ok)
+                if need_laptop:
+                    try:
+                        await asyncio.to_thread(stream.write, bytes(batch))
+                    except (RuntimeError, asyncio.CancelledError):
+                        break   # executor shutting down — exit cleanly
         except Exception as e:
             print(f"[AGENT] ❌ Play: {e}")
             raise
@@ -2563,20 +2720,97 @@ class AgentLive:
                 chunk = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 # No audio for 1 s → phone mic inactive, give PC mic back
-                self._phone_active = False
+                if self._phone_active:
+                    self._phone_active = False
+                    if self._dashboard:
+                        self._dashboard.broadcast_mic_state_sync()
                 continue
-            self._phone_active = True   # phone is streaming — silence PC mic
+            if not self._phone_active:
+                self._phone_active = True   # phone is streaming — silence PC mic
+                if hasattr(self.ui, "set_phone_mic_active"):
+                    self.ui.set_phone_mic_active(True)
+                self.ui.set_state("LISTENING")
+                if self._dashboard:
+                    self._dashboard.broadcast_mic_state_sync()
             with self._speaking_lock:
                 speaking = self._is_speaking
-            if not speaking and not self.ui.muted:
+            # Echo gating / tail hold-off (Task 1 Item 2 & Item 4)
+            now_m = time.monotonic()
+            phone_still_playing = (now_m < self._phone_play_end)
+            in_holdoff = (now_m < self._phone_tail_holdoff_until)
+            should_drop = self._pause_mic_on_reply and (speaking or phone_still_playing or in_holdoff)
+            if not should_drop:
                 try:
                     self.out_queue.put_nowait(chunk)
                 except asyncio.QueueFull:
                     pass
 
+    def _on_desktop_mute_changed(self, muted: bool = False) -> None:
+        if self._dashboard:
+            self._dashboard.broadcast_mic_state_sync()
+
     def _on_phone_connected(self) -> None:
         self.ui.write_log("SYS: Phone connected via Remote Dashboard.")
         self.ui.notify_phone_connected()
+
+    def _get_restored_status(self) -> str:
+        """Compute real restored status (active/sleeping) after phone mic stops (Task 1 Item 5)."""
+        if getattr(self.ui, "muted", False) or not self._awake:
+            return "sleeping"
+        return "active"
+
+    def _on_phone_mic_disconnected(self) -> None:
+        """Task 1 Item 6: Phone mic disconnect callback."""
+        was_active = self._phone_active
+        self._phone_active = False
+        if hasattr(self.ui, "set_phone_mic_active"):
+            self.ui.set_phone_mic_active(False)
+        # Restore agent state accurately
+        restored_status = self._get_restored_status()
+        if getattr(self.ui, "muted", False):
+            self.ui.set_state("MUTED")
+        elif not self._awake:
+            self.ui.set_state("SLEEPING")
+        else:
+            self.ui.set_state("LISTENING")
+        # Drain queued phone chunks immediately to prevent delayed re-activation
+        if self._dashboard:
+            q = self._dashboard._phone_audio_queue
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
+            asyncio.create_task(self._dashboard.broadcast({"type": "status", "state": restored_status}))
+            self._dashboard.broadcast_mic_state_sync()
+        if was_active:
+            self.ui.write_log("SYS: Phone audio stream closed — restored desktop microphone.")
+        self._phone_reply_buffer.clear()
+        self._phone_reply_dur = 0.0
+        if self._dashboard:
+            self._dashboard.broadcast_mic_state_sync()
+
+    def _on_phone_playback_disconnected(self) -> None:
+        """Task 1 Item 6: Phone playback disconnect callback.
+        Only changes routing to laptop; does NOT reset _phone_active or drain mic queue."""
+        self._phone_play_end = 0.0
+        self._phone_tail_holdoff_until = 0.0
+        self._phone_reply_buffer.clear()
+        self._phone_reply_dur = 0.0
+        if self._dashboard:
+            current_routing = self._dashboard.get_audio_routing()
+            if current_routing in ("phone", "both"):
+                self._dashboard.set_audio_routing("laptop")
+                self.ui.write_log("SYS: Phone playback disconnected — restored laptop playback.")
+                asyncio.create_task(self._dashboard.broadcast({
+                    "type": "sys",
+                    "text": "Phone playback disconnected — restored laptop playback."
+                }))
+                self._dashboard.broadcast_mic_state_sync()
+
+    def _on_phone_stream_disconnected(self) -> None:
+        self._on_phone_mic_disconnected()
+        self._on_phone_playback_disconnected()
 
     # ── dashboard command relay ─────────────────────────────────────────────
 
@@ -2588,6 +2822,7 @@ class AgentLive:
                 )
                 if not text:
                     continue
+                self._clear_interrupted()
                 # Wait up to 8s for session to become ready after a wake
                 for _ in range(80):
                     if self.session:
@@ -2643,6 +2878,13 @@ class AgentLive:
             self._dashboard = DashboardServer()
             self._dashboard.set_voice_auth(self._voice_auth)
             self._dashboard.set_conversation_active_checker(lambda: self._phone_active)
+            self._dashboard.set_desktop_muted_checker(lambda: getattr(self.ui, "muted", False))
+            self._dashboard.set_status_checker(self._get_restored_status)
+            self._dashboard.set_interrupt_callback(self.interrupt)
+            self._dashboard.set_pause_mic_callback(lambda val: setattr(self, "_pause_mic_on_reply", val))
+            self._dashboard.set_phone_mic_disconnect_callback(self._on_phone_mic_disconnected)
+            self._dashboard.set_phone_playback_disconnect_callback(self._on_phone_playback_disconnected)
+            self._dashboard.set_phone_disconnect_callback(self._on_phone_stream_disconnected)
             self._dashboard.set_connect_callback(self._on_phone_connected)
             asyncio.create_task(self._dashboard.serve())
             # Runs for the whole lifetime, not just inside an active session

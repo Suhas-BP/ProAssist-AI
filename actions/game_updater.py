@@ -8,6 +8,8 @@ import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 from config import get_os, is_windows, is_mac, is_linux
 
@@ -1060,42 +1062,64 @@ if __name__ == "__main__":
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "game_updater",
-    "description": "THE ONLY tool for ANY Steam or Epic Games request. Use for: installing, downloading, updating games, listing installed games, checking download status, scheduling updates. ALWAYS call directly for any Steam/Epic/game request. NEVER use browser_control or web_search for Steam/Epic.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "action": {
-                "type": "STRING",
-                "description": "update | install | list | download_status | schedule | cancel_schedule | schedule_status (default: update)"
+class GameUpdaterTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "game_updater"
+
+    @property
+    def description(self) -> str:
+        return (
+            "THE ONLY tool for ANY Steam or Epic Games request. Use for: installing, "
+            "downloading, updating games, listing installed games, checking download status, "
+            "scheduling updates. ALWAYS call directly for any Steam/Epic/game request. "
+            "NEVER use browser_control or web_search for Steam/Epic."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "update | install | list | download_status | schedule | cancel_schedule | schedule_status (default: update)"
+                },
+                "platform": {
+                    "type": "STRING",
+                    "description": "steam | epic | both (default: both)"
+                },
+                "game_name": {
+                    "type": "STRING",
+                    "description": "Game name (partial match supported)"
+                },
+                "app_id": {
+                    "type": "STRING",
+                    "description": "Steam AppID for install (optional)"
+                },
+                "hour": {
+                    "type": "INTEGER",
+                    "description": "Hour for scheduled update 0-23 (default: 3)"
+                },
+                "minute": {
+                    "type": "INTEGER",
+                    "description": "Minute for scheduled update 0-59 (default: 0)"
+                },
+                "shutdown_when_done": {
+                    "type": "BOOLEAN",
+                    "description": "Shut down PC when download finishes"
+                }
             },
-            "platform": {
-                "type": "STRING",
-                "description": "steam | epic | both (default: both)"
-            },
-            "game_name": {
-                "type": "STRING",
-                "description": "Game name (partial match supported)"
-            },
-            "app_id": {
-                "type": "STRING",
-                "description": "Steam AppID for install (optional)"
-            },
-            "hour": {
-                "type": "INTEGER",
-                "description": "Hour for scheduled update 0-23 (default: 3)"
-            },
-            "minute": {
-                "type": "INTEGER",
-                "description": "Minute for scheduled update 0-59 (default: 0)"
-            },
-            "shutdown_when_done": {
-                "type": "BOOLEAN",
-                "description": "Shut down PC when download finishes"
-            }
-        },
-        "required": []
-    },
-    "handler": game_updater,
-}
+            "required": []
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return game_updater(
+            parameters=parameters or {},
+            player=context.get("player"),
+            speak=context.get("speak"),
+        )
+
+
+ACTION = GameUpdaterTool()
+TOOL = ACTION.to_tool_dict()

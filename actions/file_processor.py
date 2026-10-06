@@ -24,6 +24,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, Optional
+from core.tool import AgentTool
 
 # Model choice, timeout and fallback ladder all live in core/gemini.py.
 from core import gemini
@@ -548,7 +550,7 @@ def _process_audio(path: Path, action: str, params: dict, speak=None) -> str:
 
     if action == "info":
         try:
-            from pydub import AudioSegment
+            from pydub import AudioSegment  # type: ignore
             audio    = AudioSegment.from_file(path)
             duration = len(audio) / 1000
             mins, secs = divmod(int(duration), 60)
@@ -586,7 +588,7 @@ def _process_audio(path: Path, action: str, params: dict, speak=None) -> str:
     if action == "convert":
         fmt = params.get("format", "mp3").lstrip(".")
         try:
-            from pydub import AudioSegment
+            from pydub import AudioSegment  # type: ignore
             audio = AudioSegment.from_file(path)
             out   = _output_path(path, "converted", f".{fmt}")
             audio.export(out, format=fmt)
@@ -600,7 +602,7 @@ def _process_audio(path: Path, action: str, params: dict, speak=None) -> str:
         start = float(params.get("start", 0))
         end   = float(params.get("end",   0))
         try:
-            from pydub import AudioSegment
+            from pydub import AudioSegment  # type: ignore
             audio   = AudioSegment.from_file(path)
             end_ms  = int(end * 1000)   if end   else len(audio)
             trimmed = audio[int(start * 1000):end_ms]
@@ -870,82 +872,106 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
-TOOL = {
-    "name": "file_processor",
-    "description": "Processes any file that the user has uploaded or dropped onto the interface. ALWAYS call this tool when a file is uploaded and the user asks about it. For images use describe, person, ocr, analyze, resize, compress, or convert. The person action describes visible appearance but must not identify a person's name or identity. Supports PDFs, Word documents, text, CSV/Excel, JSON/XML, code, audio, video, archives, and presentations.",
-    "parameters": {
-        "type": "OBJECT",
-        "properties": {
-            "file_path": {
-                "type": "STRING",
-                "description": "Full path to the uploaded file. Leave empty to use the currently uploaded file."
+class FileProcessorTool(AgentTool):
+    @property
+    def name(self) -> str:
+        return "file_processor"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Processes any file that the user has uploaded or dropped onto the interface. "
+            "ALWAYS call this tool when a file is uploaded and the user asks about it. "
+            "For images use describe, person, ocr, analyze, resize, compress, or convert. "
+            "The person action describes visible appearance but must not identify a person's "
+            "name or identity. Supports PDFs, Word documents, text, CSV/Excel, JSON/XML, "
+            "code, audio, video, archives, and presentations."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "OBJECT",
+            "properties": {
+                "file_path": {
+                    "type": "STRING",
+                    "description": "Full path to the uploaded file. Leave empty to use the currently uploaded file."
+                },
+                "action": {
+                    "type": "STRING",
+                    "description": "What to do with the file. Examples by type:\nimage: describe | person | ocr | resize | compress | convert | info\npdf: summarize | extract_text | to_word | info\ndocx/txt: summarize | fix | reformat | translate_hint | word_count | to_bullet\ncsv/excel: analyze | stats | filter | sort | convert | info\njson: validate | format | analyze | to_csv\ncode: explain | review | fix | optimize | run | document | test\naudio: transcribe | trim | convert | info\nvideo: trim | extract_audio | extract_frame | compress | transcribe | info | convert\narchive: list | extract\npptx: summarize | extract_text | analyze"
+                },
+                "instruction": {
+                    "type": "STRING",
+                    "description": "Free-form instruction if action doesn't cover it. E.g. 'translate this to Turkish', 'find all email addresses'"
+                },
+                "format": {
+                    "type": "STRING",
+                    "description": "Target format for conversion. E.g. 'mp3', 'pdf', 'csv', 'png'"
+                },
+                "width": {
+                    "type": "INTEGER",
+                    "description": "Target width for image resize"
+                },
+                "height": {
+                    "type": "INTEGER",
+                    "description": "Target height for image resize"
+                },
+                "scale": {
+                    "type": "NUMBER",
+                    "description": "Scale factor for image resize (e.g. 0.5)"
+                },
+                "quality": {
+                    "type": "INTEGER",
+                    "description": "Quality 1-100 for image/video compress"
+                },
+                "start": {
+                    "type": "STRING",
+                    "description": "Start time for trim: seconds or HH:MM:SS"
+                },
+                "end": {
+                    "type": "STRING",
+                    "description": "End time for trim: seconds or HH:MM:SS"
+                },
+                "timestamp": {
+                    "type": "STRING",
+                    "description": "Timestamp for video frame extraction HH:MM:SS"
+                },
+                "column": {
+                    "type": "STRING",
+                    "description": "Column name for CSV filter/sort"
+                },
+                "value": {
+                    "type": "STRING",
+                    "description": "Filter value for CSV filter"
+                },
+                "condition": {
+                    "type": "STRING",
+                    "description": "Filter condition: equals|contains|gt|lt"
+                },
+                "ascending": {
+                    "type": "BOOLEAN",
+                    "description": "Sort order for CSV sort (default: true)"
+                },
+                "save": {
+                    "type": "BOOLEAN",
+                    "description": "Save result to file (default: true)"
+                },
+                "destination": {
+                    "type": "STRING",
+                    "description": "Output folder for archive extract"
+                }
             },
-            "action": {
-                "type": "STRING",
-                "description": "What to do with the file. Examples by type:\nimage: describe | person | ocr | resize | compress | convert | info\npdf: summarize | extract_text | to_word | info\ndocx/txt: summarize | fix | reformat | translate_hint | word_count | to_bullet\ncsv/excel: analyze | stats | filter | sort | convert | info\njson: validate | format | analyze | to_csv\ncode: explain | review | fix | optimize | run | document | test\naudio: transcribe | trim | convert | info\nvideo: trim | extract_audio | extract_frame | compress | transcribe | info | convert\narchive: list | extract\npptx: summarize | extract_text | analyze"
-            },
-            "instruction": {
-                "type": "STRING",
-                "description": "Free-form instruction if action doesn't cover it. E.g. 'translate this to Turkish', 'find all email addresses'"
-            },
-            "format": {
-                "type": "STRING",
-                "description": "Target format for conversion. E.g. 'mp3', 'pdf', 'csv', 'png'"
-            },
-            "width": {
-                "type": "INTEGER",
-                "description": "Target width for image resize"
-            },
-            "height": {
-                "type": "INTEGER",
-                "description": "Target height for image resize"
-            },
-            "scale": {
-                "type": "NUMBER",
-                "description": "Scale factor for image resize (e.g. 0.5)"
-            },
-            "quality": {
-                "type": "INTEGER",
-                "description": "Quality 1-100 for image/video compress"
-            },
-            "start": {
-                "type": "STRING",
-                "description": "Start time for trim: seconds or HH:MM:SS"
-            },
-            "end": {
-                "type": "STRING",
-                "description": "End time for trim: seconds or HH:MM:SS"
-            },
-            "timestamp": {
-                "type": "STRING",
-                "description": "Timestamp for video frame extraction HH:MM:SS"
-            },
-            "column": {
-                "type": "STRING",
-                "description": "Column name for CSV filter/sort"
-            },
-            "value": {
-                "type": "STRING",
-                "description": "Filter value for CSV filter"
-            },
-            "condition": {
-                "type": "STRING",
-                "description": "Filter condition: equals|contains|gt|lt"
-            },
-            "ascending": {
-                "type": "BOOLEAN",
-                "description": "Sort order for CSV sort (default: true)"
-            },
-            "save": {
-                "type": "BOOLEAN",
-                "description": "Save result to file (default: true)"
-            },
-            "destination": {
-                "type": "STRING",
-                "description": "Output folder for archive extract"
-            }
-        },
-        "required": []
-    },
-    "handler": file_processor,
-}
+            "required": []
+        }
+
+    def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
+        return file_processor(
+            parameters=parameters or {},
+            player=context.get("player"),
+            speak=context.get("speak"),
+        )
+
+
+ACTION = FileProcessorTool()
+TOOL = ACTION.to_tool_dict()
