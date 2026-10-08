@@ -21,7 +21,18 @@ else:
 from PyQt6.QtCore import (
     QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
     QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal,
+    qInstallMessageHandler,
 )
+
+def _qt_message_handler(msg_type, context, message):
+    if "killTimer" in message or "another thread" in message:
+        tname = threading.current_thread().name
+        print(f"\n[Qt Warning] {message} on thread '{tname}'", file=sys.stderr)
+        traceback.print_stack(file=sys.stderr)
+    elif os.environ.get("DEBUG_QT", "0") == "1":
+        print(f"[Qt] {message}", file=sys.stderr)
+
+qInstallMessageHandler(_qt_message_handler)
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
     QFontDatabase, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath,
@@ -488,6 +499,11 @@ class HudCanvas(QWidget):
                 self._avatar.glance(dx, dy, hold)
         except Exception:
             pass
+
+    def reset_visemes(self) -> None:
+        """Discard any queued viseme schedule (e.g. on interrupt)."""
+        self._visemes = None
+        self._vis_i = None
 
     def push_visemes(self, frames, hop: float, at: float) -> None:
         """Thread-safe: hand over a schedule of (level, openness, width) frames.
@@ -3308,6 +3324,9 @@ class RemoteKeyOverlay(QWidget):
 
     def mark_connected(self) -> None:
         """Call from any thread when a phone successfully connects."""
+        if threading.current_thread() is not threading.main_thread():
+            QTimer.singleShot(0, self.mark_connected)
+            return
         self._ctimer.stop()
         self._key_lbl.setText("CONNECTED")
         self._key_lbl.setStyleSheet(f"""
@@ -3355,6 +3374,9 @@ class RemoteKeyOverlay(QWidget):
                 self._tick()
 
     def _do_close(self):
+        if threading.current_thread() is not threading.main_thread():
+            QTimer.singleShot(0, self._do_close)
+            return
         self._ctimer.stop()
         self.hide()
         self.closed.emit()
@@ -3379,6 +3401,7 @@ class MainWindow(QMainWindow):
     _quiz_hide_sig  = pyqtSignal()
     _review_sig     = pyqtSignal(str, str, object, object)  # document review payload
     _phone_mic_sig  = pyqtSignal(bool)                      # phone mic live indicator
+    _phone_connected_sig = pyqtSignal()                    # phone audio/playback connected indicator
 
     def __init__(self, face_path: str):
         super().__init__()
@@ -3601,6 +3624,7 @@ class MainWindow(QMainWindow):
         self._quiz_hide_sig.connect(self._hide_quiz)
         self._review_sig.connect(self._show_review)
         self._phone_mic_sig.connect(self._set_phone_mic_pill_visible)
+        self._phone_connected_sig.connect(self.notify_phone_connected)
         self._cam_stop = threading.Event()
 
         # Camera preview overlay (child of central widget, positioned in resizeEvent)
@@ -5303,6 +5327,12 @@ class MainWindow(QMainWindow):
             threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
 
     def notify_phone_connected(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            if hasattr(self, "_phone_connected_sig"):
+                self._phone_connected_sig.emit()
+            else:
+                QTimer.singleShot(0, self.notify_phone_connected)
+            return
         if self._remote_overlay and self._remote_overlay.isVisible():
             self._remote_overlay.mark_connected()
 
@@ -6096,7 +6126,10 @@ class AgentUI:
     @muted.setter
     def muted(self, v: bool):
         if v != self._win._muted:
-            self._win._toggle_mute()
+            if threading.current_thread() is not threading.main_thread():
+                QTimer.singleShot(0, self._win._toggle_mute)
+            else:
+                self._win._toggle_mute()
 
     @property
     def current_file(self) -> str | None:
@@ -6257,15 +6290,33 @@ class AgentUI:
         except Exception:
             pass
 
+    def reset_visemes(self) -> None:
+        """Thread-safe: discard any remaining viseme schedule."""
+        try:
+            self._win.hud.reset_visemes()
+        except Exception:
+            pass
+
     def notify_phone_connected(self) -> None:
-        self._win.notify_phone_connected()
+        if self._win:
+            if hasattr(self._win, "_phone_connected_sig"):
+                self._win._phone_connected_sig.emit()
+            else:
+                QTimer.singleShot(0, self._win.notify_phone_connected)
 
     def set_state(self, state: str):
         self._win._state_sig.emit(state)
 
     def set_phone_mic_active(self, active: bool):
         if self._win:
-            self._win.set_phone_mic_active(active)
+            if hasattr(self._win, "_phone_mic_sig"):
+                self._win._phone_mic_sig.emit(bool(active))
+            else:
+                self._win.set_phone_mic_active(active)
+
+    def _hide_confirm_banner(self) -> None:
+        """Thread-safe: dismiss confirmation banner."""
+        self.hide_confirm()
 
     def write_log(self, text: str):
         self._win._log_sig.emit(text)

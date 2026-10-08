@@ -48,7 +48,7 @@ def _ensure_primary_path() -> None:
     base = Path(__file__).resolve().parent.parent
     primary_dir = str(base / "primary")
     if primary_dir not in sys.path:
-        sys.path.insert(0, primary_dir)
+        sys.path.append(primary_dir)
 
 
 _ensure_primary_path()
@@ -413,6 +413,7 @@ def open_app(
     response=None,
     player=None,
     session_memory=None,
+    **extra,
 ) -> Dict[str, Any]:
     params = parameters or {}
     app_name = (params.get("app_name") or params.get("target") or params.get("path") or "").strip()
@@ -580,7 +581,9 @@ class OpenAppTool(AgentTool):
         }
 
     def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Dict[str, Any]:
-        return open_app(parameters=parameters, **context)
+        known = {"response", "player", "session_memory"}
+        filtered = {k: v for k, v in context.items() if k in known}
+        return open_app(parameters=parameters, **filtered)
 
 
 ACTION = OpenAppTool()

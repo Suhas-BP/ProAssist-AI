@@ -697,6 +697,7 @@ def desktop_control(
     response=None,
     player=None,
     session_memory=None,
+    **extra,
 ) -> str:
     """
     parameters:
@@ -804,7 +805,9 @@ class DesktopTool(AgentTool):
         }
 
     def execute(self, parameters: Optional[Dict[str, Any]] = None, **context) -> Any:
-        return desktop_control(parameters=parameters, **context)
+        known = {"response", "player", "session_memory"}
+        filtered = {k: v for k, v in context.items() if k in known}
+        return desktop_control(parameters=parameters, **filtered)
 
 
 ACTION = DesktopTool()

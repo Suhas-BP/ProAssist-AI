@@ -847,6 +847,7 @@ def reminder(
     response=None,
     player=None,
     session_memory=None,
+    **extra,
 ) -> dict:
     os_name = _get_os()
     raw_action = str(parameters.get("action") or "").strip().lower()
@@ -941,7 +942,9 @@ class ReminderTool(AgentTool):
         }
 
     def execute(self, parameters: dict = None, **context):
-        return reminder(parameters=parameters, **context)
+        known = {"response", "player", "session_memory"}
+        filtered = {k: v for k, v in context.items() if k in known}
+        return reminder(parameters=parameters, **filtered)
 
 
 ACTION = ReminderTool()

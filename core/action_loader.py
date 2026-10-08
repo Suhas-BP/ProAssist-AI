@@ -120,7 +120,9 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
     kwargs = {}
     for key in _CTX_KEYS:
         if has_var_kw or key in sig.parameters:
-            kwargs[key] = ctx.get(key)
+            val = ctx.get(key)
+            if val is not None or key in sig.parameters:
+                kwargs[key] = val
     return fn(parameters=parameters, **kwargs)
 
 

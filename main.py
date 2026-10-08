@@ -1329,6 +1329,8 @@ class AgentLive:
         self.set_speaking(False)
         # The words we were about to mouth are never going to be spoken now.
         self._visemes.reset()
+        if hasattr(self.ui, "reset_visemes"):
+            self.ui.reset_visemes()
         self._play_cursor = 0.0     # next batch starts a fresh timeline
         if self._turn_done_event:
             self._turn_done_event.clear()
@@ -2160,6 +2162,8 @@ class AgentLive:
                                 in_buf  = []
                                 out_buf = []
                                 self._visemes.reset()
+                                if hasattr(self.ui, "reset_visemes"):
+                                    self.ui.reset_visemes()
                                 continue
 
                             full_in = " ".join(in_buf).strip()

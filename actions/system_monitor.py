@@ -499,6 +499,7 @@ def system_monitor(
     response=None,
     player=None,
     session_memory=None,
+    **extra,
 ) -> dict:
     """Action handler for the system_monitor tool."""
     params = parameters or {}
@@ -594,7 +595,9 @@ class SystemMonitorTool(AgentTool):
         }
 
     def execute(self, parameters: dict = None, **context):
-        return system_monitor(parameters=parameters, **context)
+        known = {"response", "player", "session_memory"}
+        filtered = {k: v for k, v in context.items() if k in known}
+        return system_monitor(parameters=parameters, **filtered)
 
 
 ACTION = SystemMonitorTool()

@@ -78,6 +78,8 @@ TEST_SUITES = [
     ("Task 1: Phone Audio Output & Routing", [sys.executable, "-m", "unittest", "tests/test_phone_audio_output.py"]),
     # Task 1: Mobile Audio Client JS & Playwright UI Tests
     ("Task 1: Mobile Audio Client JS & UI", [sys.executable, "tests/verify_mobile_audio_ui.py"]),
+    # Action Loader Context & Qt Thread Safety
+    ("Action Loader Context & Qt Thread Safety", [sys.executable, "-m", "unittest", "tests/test_action_loader_and_qt_thread_safety.py"]),
 ]
 
 def main():

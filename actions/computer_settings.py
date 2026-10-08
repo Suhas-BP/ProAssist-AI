@@ -1110,6 +1110,7 @@ def computer_settings(
     response=None,
     player=None,
     session_memory=None,
+    **extra,
 ) -> dict:
     if not _PYAUTOGUI:
         return {
@@ -1436,7 +1437,9 @@ class ComputerSettingsTool(AgentTool):
         }
 
     def execute(self, parameters: dict = None, **context):
-        return computer_settings(parameters=parameters, **context)
+        known = {"response", "player", "session_memory"}
+        filtered = {k: v for k, v in context.items() if k in known}
+        return computer_settings(parameters=parameters, **filtered)
 
 
 ACTION = ComputerSettingsTool()
